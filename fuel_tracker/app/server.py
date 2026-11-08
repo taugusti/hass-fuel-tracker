@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
 MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
 MEDIA_SUB = "fuel_tracker"
@@ -227,14 +227,25 @@ Many displays use a comma as decimal separator: "38,47" means 38.47. Return numb
 If a number cannot be read reliably, omit the field rather than guessing.
 Use note (short, in English) to mention anything hard to read or numbers that do not add up."""
 
-ODO_INSTRUCTIONS = """The image shows the odometer of a vehicle. It may be a digital display or
-mechanical number drums on an older vehicle. Read the TOTAL distance (not a trip meter).
-- reading: the odometer value as a number. If the rightmost drum/digit is clearly tenths
-  (different colour, often white or red background, or after a decimal point), include it as a
-  decimal (e.g. 45678.3) and set has_tenths=true.
-- unit: "km" if the display says km/KILOMETERS, "miles" if it says MILES/mi/MPH, otherwise "unknown".
-If a drum sits between two digits, use the lower digit.
+ODO_INSTRUCTIONS = """The image shows the odometer of a vehicle (a digital display or mechanical number
+drums on an older vehicle). Read the TOTAL distance (not a trip meter). Work step by step:
+1. Find the odometer window. In digits_seen, list the whole-number drums/digits from left to right,
+   then a bar, then the tenths drum if there is one, e.g. "1 2 4 0 8 | 7". Each physical drum appears
+   exactly once - never list the tenths drum both before and after the bar.
+2. Decide whether the rightmost drum is TENTHS. On mechanical odometers the tenths drum almost always
+   looks different from the others: a white, red or silver background, inverted colours, a separate
+   frame or a smaller window. If it looks different in any of these ways, it IS tenths. A digital
+   display shows tenths after a decimal point or in a smaller font.
+3. reading = the whole digits followed by the tenths as a decimal (e.g. 1 2 4 0 8 + tenths 7 -> 12408.7).
+   Set has_tenths accordingly.
+- unit: "km" if the dial or display says km/KILOMETER, "miles" if it says MILES/mi/MPH, otherwise "unknown".
+If a drum sits between two digits, use the lower digit. A drum partly hidden by the needle is still a drum.
 Omit reading if it cannot be read reliably. Use note (short, in English) to mention any uncertainty."""
+
+LOCATE_INSTRUCTIONS = """The image shows a vehicle dashboard or instrument. Find the odometer window (the row
+of number drums or the digital total-distance display, not a trip meter). Give the position of its centre
+as fractions of the image: cx (0 = left edge, 1 = right edge) and cy (0 = top edge, 1 = bottom edge), and
+its approximate width as a fraction of the image width. Set found=false if no odometer is visible."""
 
 NUM = {"number": {"mode": "box", "step": "any"}}
 TXT = {"text": {}}
@@ -249,10 +260,23 @@ PUMP_STRUCTURE = {
     "note": {"selector": TXT, "description": "Short note about uncertainties"},
 }
 ODO_STRUCTURE = {
+    "digits_seen": {"selector": TXT, "description": "Whole drums left to right | tenths drum"},
     "reading": {"selector": NUM, "description": "Odometer reading"},
     "has_tenths": {"selector": BOOL, "description": "Whether reading includes tenths"},
     "unit": {"selector": TXT, "description": "km, miles or unknown"},
     "note": {"selector": TXT, "description": "Short note about uncertainties"},
+}
+
+LOCATE_STRUCTURE = {
+    "found": {"selector": BOOL, "description": "Odometer visible"},
+    "cx": {"selector": NUM, "description": "Centre x, 0-1"},
+    "cy": {"selector": NUM, "description": "Centre y, 0-1"},
+    "width": {"selector": NUM, "description": "Width as fraction of image width"},
+}
+TASKS = {
+    "pump": ("Read fuel pump display", PUMP_INSTRUCTIONS, PUMP_STRUCTURE),
+    "odo": ("Read odometer", ODO_INSTRUCTIONS, ODO_STRUCTURE),
+    "odo_locate": ("Locate odometer", LOCATE_INSTRUCTIONS, LOCATE_STRUCTURE),
 }
 
 
@@ -274,11 +298,12 @@ def _response_data(res):
     return data if isinstance(data, dict) else {}
 
 
-def ai_read(kind, filename):
-    instructions = PUMP_INSTRUCTIONS if kind == "pump" else ODO_INSTRUCTIONS
-    structure = PUMP_STRUCTURE if kind == "pump" else ODO_STRUCTURE
+def ai_read(kind, filename, context=""):
+    task_name, instructions, structure = TASKS[kind]
+    if context:
+        instructions += "\n" + context
     base = {
-        "task_name": "Read fuel pump display" if kind == "pump" else "Read odometer",
+        "task_name": task_name,
         "entity_id": get_settings()["ai_task_entity"],
         "attachments": [{
             "media_content_id": f"media-source://media_source/local/{MEDIA_SUB}/{filename}",
@@ -730,7 +755,18 @@ class Handler(BaseHTTPRequestHandler):
 
             if p == "/api/extract" and method == "POST":
                 b = self.read_json()
-                kind = "pump" if b.get("kind") == "pump" else "odo"
+                kind = b.get("kind") if b.get("kind") in TASKS else "odo"
+                context = ""
+                prev = b.get("previous") or {}
+                prev_odo = to_num(prev.get("odometer"))
+                if kind == "odo" and prev_odo is not None:
+                    unit = "miles" if prev.get("unit") == "mi" else "km"
+                    when = str(prev.get("ts") or "")[:10]
+                    context = (f"Context: the previous recorded reading for this vehicle was {prev_odo:g} {unit}"
+                               + (f" on {when}" if when else "") + ". The new reading is normally equal to or somewhat higher "
+                               "(usually by less than a few thousand). Use this to sanity-check the number of drums and any "
+                               "partly hidden digit, but report what the drums actually show; if they clearly show something "
+                               "else, say so in note.")
                 img = b.get("image") or ""
                 if "," in img:
                     img = img.split(",", 1)[1]
@@ -741,7 +777,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(MEDIA_DIR, name), "wb") as f:
                     f.write(raw)
                 t0 = time.time()
-                data, err = ai_read(kind, name)
+                data, err = ai_read(kind, name, context)
                 log(f"Read {kind} in {time.time() - t0:.1f}s:", json.dumps(data, ensure_ascii=False), err or "")
                 return self.send_json({"image": name, "data": data, "error": err})
 

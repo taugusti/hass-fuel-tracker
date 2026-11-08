@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 – 2026-11-08
+- Odometer reading in two steps: the AI first locates the odometer in the photo, then reads it from a full-resolution crop of the original photo (small number drums were misread at reduced size).
+- Stricter odometer instructions: each drum listed once, tenths drum recognised by its different colour; the drums seen are shown in the summary.
+- The previous odometer reading of the vehicle is given to the AI as a sanity check.
+- If a reading is implausible next to the previous one but fits with the last digit as tenths, it is corrected and the correction is shown.
+
 ## 0.3.1 – 2026-11-08
 - Number fields accept both comma and dot as decimal separator, and thousands separators ("35336,2", "35.336,2", "35,336.2"). Values are shown in the browser's number format.
 - "Will be saved as" line under the form shows exactly what will be stored; numbers that cannot be read block saving.

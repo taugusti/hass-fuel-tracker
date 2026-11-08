@@ -369,6 +369,33 @@ async function shrink(file, max=1600){
   return c.toDataURL('image/jpeg', 0.85);
 }
 
+// Crop the odometer area from the ORIGINAL photo (full resolution) around a centre given as fractions
+async function cropAround(file, cx, cy, w){
+  const bmp = await createImageBitmap(file, {imageOrientation:'from-image'});
+  const W = bmp.width, H = bmp.height;
+  const cw = Math.min(W, Math.max(0.4*W, 3*(w>0 && w<1 ? w : 0.15)*W)), ch = Math.min(H, cw*0.45);
+  const x0 = Math.max(0, Math.min(W-cw, cx*W - cw/2)), y0 = Math.max(0, Math.min(H-ch, cy*H - ch/2));
+  const k = Math.min(1, 1600/cw), c = document.createElement('canvas');
+  c.width = Math.round(cw*k); c.height = Math.round(ch*k);
+  c.getContext('2d').drawImage(bmp, x0, y0, cw, ch, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.9);
+}
+// If the reading is implausible next to the previous one but reading/10 fits, the last digit was tenths
+function odoSanity(d){
+  const prev = lastFillBefore(), v = veh();
+  if (!prev || d.reading==null || isNaN(+d.reading)) return d;
+  const toVeh = km => km / (v && v.odo_unit==='mi' ? KMU.mi : 1);
+  const limit = Math.max(toVeh(5000), S.cfg.warn_distance ? toVeh(S.cfg.warn_distance * KMU[du()]) : 0);
+  const roll = (v && v.odo_rollover) || 0, p = prev.odometer;
+  const ok = x => (x >= p - 1 && x - p <= limit) || (roll && x < p && x + roll - p <= limit);
+  const r = +d.reading;
+  if (!ok(r) && ok(Math.round(r)/10)) {
+    const fixed = Math.round(r)/10;
+    return {...d, reading: fixed, has_tenths: true, note: `Adjusted from ${nf(r,1)} to ${nf(fixed,1)}: the last digit was taken as tenths, because ${nf(r,1)} is far from the previous reading (${nf(p,1)}).` + (d.note ? ' ' + d.note : '')};
+  }
+  return d;
+}
+
 async function handlePhoto(kind, file, picked){
   const box = $('#shot-'+kind), img = box.querySelector('img'), st = box.querySelector('.status');
   box.classList.add('has'); st.classList.remove('err');
@@ -387,8 +414,27 @@ async function handlePhoto(kind, file, picked){
     }
     const dataUrl = await shrink(file);
     img.src = dataUrl; img.classList.remove('hide');
-    const r = await api('api/extract', {method:'POST', body: JSON.stringify({kind, image:dataUrl})});
-    S.shots[kind] = r.image; S.ai[kind] = r.data;
+    let r;
+    if (kind === 'pump') {
+      r = await api('api/extract', {method:'POST', body: JSON.stringify({kind, image:dataUrl})});
+      S.shots.pump = r.image;
+    } else {
+      // 1) find the odometer in the whole photo, 2) read it from a full-resolution crop
+      st.innerHTML = '<span class="spin"></span> Finding the odometer…';
+      const loc = await api('api/extract', {method:'POST', body: JSON.stringify({kind:'odo_locate', image:dataUrl})});
+      S.shots.odo = loc.image;
+      const L = loc.data || {};
+      let readImg = dataUrl, cropped = false;
+      if (!loc.error && L.found !== false && L.cx > 0 && L.cx < 1 && L.cy > 0 && L.cy < 1) {
+        try { readImg = await cropAround(file, L.cx, L.cy, L.width); cropped = true; } catch(e) {}
+      }
+      st.innerHTML = '<span class="spin"></span> Reading the odometer…';
+      const prev = lastFillBefore(), v = veh();
+      const previous = prev ? {odometer: prev.odometer, ts: prev.ts, unit: v && v.odo_unit} : null;
+      r = await api('api/extract', {method:'POST', body: JSON.stringify({kind:'odo', image:readImg, previous})});
+      if (r.data) r.data._cropped = cropped;
+    }
+    S.ai[kind] = r.data;
     if (r.error) { st.textContent = 'Could not read: ' + r.error; st.classList.add('err'); }
     else applyAI(kind, r.data || {});
   } catch(e) { st.textContent = 'Error: ' + e.message; st.classList.add('err'); }
@@ -414,9 +460,10 @@ function applyAI(kind, d){
     st.textContent = ok ? '✓ Copied to the form' : 'No numbers found – enter them yourself';
     S.aiMsg.pump = {title:'Pump display', note:d.note, reading: ok ? [d.liters!=null?nf(d.liters,2)+' '+(d.volume_unit && d.volume_unit!=='unknown' ? d.volume_unit : vLab()):null, d.total_price!=null?nf(d.total_price,2)+' '+S.cur:null, d.price_per_liter!=null?nf(d.price_per_liter,2)+' '+S.cur+'/'+(d.volume_unit && d.volume_unit!=='unknown' ? d.volume_unit : vLab()):null].filter(Boolean).join(' · ') : 'Could not be read – enter the numbers yourself'};
   } else {
+    d = odoSanity(d); S.ai.odo = d;
     const ok = setAI('#odo','#ai-odo', d.reading, 1);
     st.textContent = ok ? '✓ Copied to the form' : 'Could not read the odometer – enter it yourself';
-    S.aiMsg.odo = {title:'Odometer', note:d.note, reading: ok ? `${nf(d.reading, d.has_tenths?1:0)} ${d.unit && d.unit!=='unknown' ? d.unit : ''}` : 'Could not be read – enter it yourself'};
+    S.aiMsg.odo = {title:'Odometer', note:d.note, reading: ok ? `${nf(d.reading, d.has_tenths?1:0)} ${d.unit && d.unit!=='unknown' ? d.unit : ''}` + (d.digits_seen ? ` (drums: ${d.digits_seen})` : '') : 'Could not be read – enter it yourself'};
   }
   renderAIBox();
   setTimeout(() => $('#form-title').closest('.card').scrollIntoView({behavior:'smooth', block:'start'}), 150);

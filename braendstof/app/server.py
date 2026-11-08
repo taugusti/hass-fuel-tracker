@@ -26,9 +26,25 @@ MEDIA_SUB = "braendstof"
 MEDIA_DIR = os.path.join(MEDIA_ROOT, MEDIA_SUB)
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 HA_API = os.environ.get("BS_HA_API", "http://supervisor/core/api")
-TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+def _read_token():
+    tok = os.environ.get("SUPERVISOR_TOKEN", "")
+    if tok:
+        return tok
+    # s6-overlay giver ikke altid containerens miljø videre til CMD
+    for path in ("/run/s6/container_environment/SUPERVISOR_TOKEN",
+                 "/var/run/s6/container_environment/SUPERVISOR_TOKEN"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            pass
+    return ""
+
+
+TOKEN = _read_token()
 PORT = int(os.environ.get("BS_PORT", "8099"))
 DEV = os.environ.get("BS_DEV") == "1"
+VERSION = "0.1.1"
 KM_PER_MI = 1.609344
 CO2_KG_PER_L = 2.31  # ca. for benzin (forbrænding)
 
@@ -404,8 +420,12 @@ def compute_stats(vehicle):
 
 
 def publish_sensors():
-    if not PUBLISH or not TOKEN:
+    if not PUBLISH:
         return
+    if not TOKEN:
+        log("Ingen SUPERVISOR_TOKEN – kan ikke oprette sensorer")
+        return
+    n = 0
     for v in rows("SELECT * FROM vehicles WHERE active=1"):
         try:
             st = compute_stats(v)
@@ -441,9 +461,11 @@ def publish_sensors():
             attrs.update(extra)
             try:
                 ha_request("POST", f"/states/sensor.braendstof_{slug}_{key}", {"state": state, "attributes": attrs}, timeout=10)
+                n += 1
             except Exception as e:
                 log("Kunne ikke opdatere sensor", key, repr(e))
                 return
+    log(f"Opdaterede {n} sensorer")
 
 
 def publish_async():
@@ -532,7 +554,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(STATIC_DIR, "index.html"), "rb") as f:
                     return self.send_bytes(f.read(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
             if p == "/api/status":
-                return self.send_json({"ai_entity": AI_ENTITY, "has_token": bool(TOKEN), "version": "0.1.0"})
+                return self.send_json({"ai_entity": AI_ENTITY, "has_token": bool(TOKEN), "version": VERSION})
             if p == "/api/vehicles":
                 if method == "GET":
                     return self.send_json(rows("SELECT * FROM vehicles ORDER BY active DESC, sort, id"))
@@ -642,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    log(f"Brændstof starter på port {PORT} – AI-entitet: {AI_ENTITY}")
+    log(f"Brændstof {VERSION} starter på port {PORT} – AI-entitet: {AI_ENTITY}, token: {'ja' if TOKEN else 'MANGLER'}")
     publish_async()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

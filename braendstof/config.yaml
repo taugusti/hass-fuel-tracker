@@ -1,5 +1,5 @@
 name: Brændstof
-version: "0.1.0"
+version: "0.1.1"
 slug: braendstof
 description: Benzinlog for jeeperne – tag billede af pumpe og km-tæller, Claude aflæser tallene
 url: https://github.com/taugusti/hass-fuel-tracker

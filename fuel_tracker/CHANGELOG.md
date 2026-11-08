@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.1 – 2026-11-08
+- Version number shown next to the title.
+
 ## 0.4.0 – 2026-11-08
 - Odometer reading in two steps: the AI first locates the odometer in the photo, then reads it from a full-resolution crop of the original photo (small number drums were misread at reduced size).
 - Stricter odometer instructions: each drum listed once, tenths drum recognised by its different colour; the drums seen are shown in the summary.

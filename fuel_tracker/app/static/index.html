@@ -96,7 +96,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 </head>
 <body>
 <div class="wrap">
-  <header><div><h1>⛽ Fuel Tracker</h1><div class="sub">Fuel log for your vehicles</div></div></header>
+  <header><div><h1>⛽ Fuel Tracker <span id="hver" style="font-size:13px;font-weight:500;color:var(--muted)"></span></h1><div class="sub">Fuel log for your vehicles</div></div></header>
   <nav class="tabs">
     <button data-tab="tank" class="on"><b>⛽</b>Refuel</button>
     <button data-tab="stats"><b>📈</b>Statistics</button>
@@ -747,7 +747,7 @@ $('#save-settings').onclick = async () => {
   try {
     const st = await api('api/status');
     S.cfg = st.settings; S.cur = S.cfg.currency; applyUnitLabels();
-    $('#ver').textContent = `Fuel Tracker v${st.version}`;
+    $('#ver').textContent = `Fuel Tracker v${st.version}`; $('#hver').textContent = 'v' + st.version;
     await loadVehicles(); resetForm();
     // start on statistics when the selected vehicle already has refuels
     const v = veh(); showTab(v && v.fill_count ? 'stats' : 'tank');

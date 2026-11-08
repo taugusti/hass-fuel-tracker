@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.4 – 2026-11-08
+- Billeder valgt med "Vælg": tidspunktet hentes fra billedets EXIF-optagelsestid (pumpebilledet vinder over km-tælleren); uden EXIF bruges filens dato med en advarsel. Kamerabilleder bruger fortsat "nu".
+
 ## 0.1.3 – 2026-11-08
 - Aflæste tal overføres synligt til registreringen: grønne felter, opsummering med Claudes bemærkninger, siden ruller ned til formularen. Felter markeres "rettet" eller "beregnet". Intet gemmes før Gem.
 

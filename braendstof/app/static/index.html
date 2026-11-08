@@ -124,7 +124,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
     <div class="card">
       <h2 id="form-title">Ny tankning</h2>
       <div id="ai-box"></div>
-      <div class="f"><label>Tidspunkt</label><input type="datetime-local" id="ts"></div>
+      <div class="f"><label>Tidspunkt<span class="ai" id="ai-ts"></span></label><input type="datetime-local" id="ts"></div>
       <div class="grid3">
         <div class="f"><label>Liter<span class="ai" id="ai-liters"></span></label><input type="number" inputmode="decimal" step="0.01" id="liters"></div>
         <div class="f"><label>Beløb kr<span class="ai" id="ai-total"></span></label><input type="number" inputmode="decimal" step="0.01" id="total"></div>
@@ -238,7 +238,36 @@ async function refresh(){
 let pendingKind = null;
 $$('[data-cap]').forEach(b => b.onclick = () => { pendingKind=b.dataset.cap; $('#file-cap').click(); });
 $$('[data-pick]').forEach(b => b.onclick = () => { pendingKind=b.dataset.pick; $('#file-pick').click(); });
-['#file-cap','#file-pick'].forEach(id => $(id).onchange = e => { const f=e.target.files[0]; e.target.value=''; if(f && pendingKind) handlePhoto(pendingKind, f); });
+['#file-cap','#file-pick'].forEach(id => $(id).onchange = e => { const f=e.target.files[0]; e.target.value=''; if(f && pendingKind) handlePhoto(pendingKind, f, id==='#file-pick'); });
+
+// EXIF-optagelsestid (DateTimeOriginal, ellers DateTime) fra en JPEG – lokal tid "ÅÅÅÅ-MM-DDTHH:MM"
+async function exifDate(file){
+  try {
+    const v = new DataView(await file.slice(0, 256*1024).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    let o = 2;
+    while (o + 4 < v.byteLength){
+      const marker = v.getUint16(o), len = v.getUint16(o+2);
+      if (marker === 0xFFE1 && v.getUint32(o+4) === 0x45786966){ // "Exif"
+        const t = o + 10, le = v.getUint16(t) === 0x4949;
+        const u16 = x => v.getUint16(t+x, le), u32 = x => v.getUint32(t+x, le);
+        const str = (x, n) => { let r=''; for (let i=0;i<n;i++){ const c=v.getUint8(t+x+i); if(!c) break; r+=String.fromCharCode(c);} return r; };
+        const readIfd = off => { const out={}; const n=u16(off); for (let i=0;i<n;i++){ const e=off+2+i*12, tag=u16(e), cnt=u32(e+4);
+          out[tag] = tag===0x8769 ? u32(e+8) : (cnt>4 ? str(u32(e+8), cnt) : null); } return out; };
+        const ifd0 = readIfd(u32(4));
+        let d = null;
+        if (ifd0[0x8769]) { const ex = readIfd(ifd0[0x8769]); d = ex[0x9003] || ex[0x9004]; }
+        d = d || ifd0[0x0132];
+        const m = d && d.match(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2})/);
+        return m && m[1] !== '0000' ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}` : null;
+      }
+      if ((marker & 0xFF00) !== 0xFF00) break;
+      o += 2 + len;
+    }
+  } catch(e){}
+  return null;
+}
+function fmtTs(ts){ const d=new Date(ts); return d.toLocaleString('da-DK',{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
 
 async function shrink(file, max=1600){
   let bmp;
@@ -250,12 +279,22 @@ async function shrink(file, max=1600){
   return c.toDataURL('image/jpeg', 0.85);
 }
 
-async function handlePhoto(kind, file){
+async function handlePhoto(kind, file, picked){
   const box = $('#shot-'+kind), img = box.querySelector('img'), st = box.querySelector('.status');
   box.classList.add('has'); st.classList.remove('err');
   st.innerHTML = '<span class="spin"></span> Claude aflæser…';
   S.busy++; updateSave();
   try {
+    if (picked) {
+      let ts = await exifDate(file), src = 'billedets EXIF';
+      if (!ts && file.lastModified) { const d=new Date(file.lastModified); d.setMinutes(d.getMinutes()-d.getTimezoneOffset()); ts=d.toISOString().slice(0,16); src='filens dato'; }
+      // pumpebilledets dato vinder over km-tællerens
+      if (ts && (kind==='pump' || !S.tsFrom || S.tsFrom.kind!=='pump')) {
+        $('#ts').value = ts; S.tsFrom = {kind, src, ts};
+        $('#ts').classList.add('aifill'); $('#ai-ts').textContent = '✓ fra billede';
+        renderAIBox(); checkWarnings();
+      }
+    }
     const dataUrl = await shrink(file);
     img.src = dataUrl; img.classList.remove('hide');
     const r = await api('api/extract', {method:'POST', body: JSON.stringify({kind, image:dataUrl, vehicle_id:S.vid})});
@@ -293,6 +332,7 @@ function applyAI(kind, d){
 }
 function renderAIBox(){
   const m = ['pump','odo'].map(k => S.aiMsg[k]).filter(Boolean);
+  if (S.tsFrom) m.unshift({title:'Tidspunkt', reading: fmtTs(S.tsFrom.ts) + ` (${S.tsFrom.src}, ${S.tsFrom.kind==='pump'?'pumpebillede':'km-tæller-billede'})`, note: S.tsFrom.src==='filens dato' ? 'Billedet havde ingen optagelsesdato – filens dato er brugt, tjek den.' : null});
   $('#ai-box').innerHTML = !m.length ? '' : `<div class="aibox"><b>Claude har udfyldt de grønne felter.</b> Tjek dem og ret hvis noget er forkert – intet gemmes før du trykker Gem.
     ${m.map(x => `<div class="reading">${esc(x.title)}: ${esc(x.reading)}</div>${x.note ? `<div class="n">⚠️ ${esc(x.note)}</div>` : ''}`).join('')}</div>`;
 }
@@ -327,7 +367,7 @@ function checkWarnings(){
   if (v && v.tank_l && L > v.tank_l * 1.05) w.push(`${nf(L,2)} L er mere end tanken (${nf(v.tank_l,0)} L).`);
   $('#warns').innerHTML = w.map(x => `<div class="warn">⚠️ ${esc(x)}</div>`).join('');
 }
-$('#ts').addEventListener('change', checkWarnings);
+$('#ts').addEventListener('change', () => { $('#ts').classList.remove('aifill'); if (S.tsFrom) $('#ai-ts').textContent='✎ rettet'; checkWarnings(); });
 function updateSave(){ $('#save').disabled = S.busy>0; $('#save').textContent = S.busy>0 ? 'Venter på aflæsning…' : (S.editId?'Gem ændringer':'Gem tankning'); }
 function fillStationList(){
   const st = [...new Set(S.fills.map(f=>f.station).filter(Boolean))];
@@ -337,7 +377,7 @@ function resetForm(){
   S.editId=null; S.shots={pump:null,odo:null}; S.ai={pump:null,odo:null};
   ['#liters','#total','#ppl','#odo','#station','#note','#fuel'].forEach(id=>$(id).value='');
   $$('.ai').forEach(e=>e.textContent=''); $$('input.aifill').forEach(e=>e.classList.remove('aifill','flash'));
-  S.aiMsg = {pump:null, odo:null}; renderAIBox();
+  S.aiMsg = {pump:null, odo:null}; S.tsFrom = null; renderAIBox();
   $('#ts').value = nowLocal(); $('#full').checked = true; $('#missed').checked = false;
   ['pump','odo'].forEach(k=>{ const b=$('#shot-'+k); b.classList.remove('has'); b.querySelector('img').classList.add('hide'); b.querySelector('.status').textContent = k==='pump'?'Liter og pris':'Kilometerstand'; });
   $('#form-title').textContent='Ny tankning'; $('#cancel-edit').classList.add('hide'); $('#warns').innerHTML=''; updateSave();
@@ -362,7 +402,7 @@ $('#save').onclick = async () => {
 function editFill(f){
   showTab('tank');
   S.editId = f.id; S.shots = {pump:f.img_pump, odo:f.img_odo};
-  $$('input.aifill').forEach(e=>e.classList.remove('aifill','flash')); $$('.ai').forEach(e=>e.textContent=''); S.aiMsg={pump:null,odo:null}; renderAIBox();
+  $$('input.aifill').forEach(e=>e.classList.remove('aifill','flash')); $$('.ai').forEach(e=>e.textContent=''); S.aiMsg={pump:null,odo:null}; S.tsFrom=null; renderAIBox();
   try { S.ai = {pump: f.ai_pump?JSON.parse(f.ai_pump):null, odo: f.ai_odo?JSON.parse(f.ai_odo):null}; } catch(e){ S.ai={pump:null,odo:null}; }
   $('#ts').value = f.ts; $('#liters').value = f.liters ?? ''; $('#total').value = f.price_total ?? ''; $('#ppl').value = f.price_per_l ?? '';
   $('#odo').value = f.odometer ?? ''; $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;

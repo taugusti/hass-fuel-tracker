@@ -141,11 +141,12 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
       <div id="ai-box"></div>
       <div class="f"><label>Date and time<span class="ai" id="ai-ts"></span></label><input type="datetime-local" id="ts"></div>
       <div class="grid3">
-        <div class="f"><label>Volume (<span class="vu"></span>)<span class="ai" id="ai-liters"></span></label><input type="number" inputmode="decimal" step="0.01" id="liters"></div>
-        <div class="f"><label>Total <span class="cur"></span><span class="ai" id="ai-total"></span></label><input type="number" inputmode="decimal" step="0.01" id="total"></div>
-        <div class="f"><label><span class="cur"></span>/<span class="vu"></span><span class="ai" id="ai-ppl"></span></label><input type="number" inputmode="decimal" step="0.001" id="ppl"></div>
+        <div class="f"><label>Volume (<span class="vu"></span>)<span class="ai" id="ai-liters"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="liters"></div>
+        <div class="f"><label>Total <span class="cur"></span><span class="ai" id="ai-total"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="total"></div>
+        <div class="f"><label><span class="cur"></span>/<span class="vu"></span><span class="ai" id="ai-ppl"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="ppl"></div>
       </div>
-      <div class="f"><label>Odometer (<span id="odo-unit">km</span>)<span class="ai" id="ai-odo"></span></label><input type="number" inputmode="decimal" step="0.1" id="odo"></div>
+      <div class="f"><label>Odometer (<span id="odo-unit">km</span>)<span class="ai" id="ai-odo"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="odo"></div>
+      <div class="hint" id="preview" style="margin:-4px 0 6px"></div>
       <div id="warns"></div>
       <label class="check"><input type="checkbox" id="full" checked><span>Filled to the top<small>Consumption is calculated from full tank to full tank</small></span></label>
       <label class="check"><input type="checkbox" id="missed"><span>A refuel is missing since the last one<small>This period is then left out of the km/L calculation</small></span></label>
@@ -198,7 +199,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
         <div class="f"><label>Volume</label><select id="set-volume"><option value="L">Liters (L)</option><option value="gal_us">US gallons</option><option value="gal_uk">UK (imperial) gallons</option></select></div>
         <div class="f"><label>Consumption shown as</label><select id="set-cons"><option value="dpv"></option><option value="vp100"></option></select></div>
       </div>
-      <div class="f"><label>Warn when the distance since the last refuel exceeds (<span id="set-warn-unit"></span>)</label><input type="number" id="set-warn" placeholder="no warning"></div>
+      <div class="f"><label>Warn when the distance since the last refuel exceeds (<span id="set-warn-unit"></span>)</label><input type="text" inputmode="decimal" autocomplete="off" id="set-warn" placeholder="no warning"></div>
     </div>
     <div class="card"><h2>Fuel types</h2>
       <div class="hint" style="margin-bottom:8px">Shown as suggestions in the form. The CO₂ factor (kg per liter burned) is used for the CO₂ statistic; refuels with another fuel name are left out of it.</div>
@@ -229,6 +230,34 @@ const fdate = ts => ts ? new Date(ts).toLocaleDateString(LOC,{day:'numeric',mont
 const fdt = ts => new Date(ts).toLocaleString(LOC,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 const veh = () => S.vehicles.find(v => v.id === S.vid);
 const unitLabel = v => (v && v.odo_unit === 'mi') ? 'miles' : 'km';
+// ---------- number input: accepts both "35336,2", "35.336,2", "35,336.2" and "35336.2"
+const SEP = (() => { const p = new Intl.NumberFormat(LOC).formatToParts(12345.6); return {dec: (p.find(x=>x.type==='decimal')||{}).value || '.', grp: (p.find(x=>x.type==='group')||{}).value || ','}; })();
+function parseNum(str){
+  if (str==null) return null;
+  let t = String(str).trim().replace(/[\s  ']/g, '');
+  if (!t) return null;
+  const hasC = t.includes(','), hasD = t.includes('.');
+  if (hasC && hasD) {                                   // the last one is the decimal separator
+    const dec = t.lastIndexOf(',') > t.lastIndexOf('.') ? ',' : '.';
+    t = t.split(dec === ',' ? '.' : ',').join('').replace(dec, '.');
+  } else if (hasC || hasD) {
+    const sep = hasC ? ',' : '.', parts = t.split(sep);
+    if (parts.length > 2) t = parts.join('');            // 1.234.567 -> grouping
+    else if (parts[1].length === 3 && sep === SEP.grp && sep !== SEP.dec) t = parts.join('');  // 35.336 in a locale that groups with "."
+    else t = parts.join('.');                            // decimal
+  }
+  if (!/^-?\d*\.?\d+$/.test(t)) return NaN;
+  return parseFloat(t);
+}
+const num = id => { const v = parseNum($(id).value); return v==null || isNaN(v) ? null : v; };
+const fmtIn = (n, d=2) => n==null || isNaN(n) ? '' : Number(n).toLocaleString(LOC, {useGrouping:false, maximumFractionDigits:d});
+function updatePreview(){
+  const parts = [], bad = [];
+  const add = (id, lab, unit, d) => { const raw = $(id).value.trim(); if (!raw) return; const v = parseNum(raw); if (v==null || isNaN(v)) bad.push(lab); else parts.push(`${lab} ${nf(v,d)}${unit?' '+unit:''}`); };
+  add('#liters','volume',vLab(),2); add('#total','total',S.cur,2); add('#ppl','price',S.cur+'/'+vLab(),3); add('#odo','odometer',unitLabel(veh()),1);
+  $('#preview').innerHTML = (parts.length ? 'Will be saved as: ' + esc(parts.join(' · ')) : '') + (bad.length ? ` <span style="color:var(--bad)">Not a number: ${esc(bad.join(', '))}</span>` : '');
+}
+
 // ---------- units (data is stored in km and liters; this converts for display)
 const KMU = {km:1, mi:1.609344}, LU = {L:1, gal_us:3.785411784, gal_uk:4.54609};
 const du = () => S.cfg.distance_unit, vu = () => S.cfg.volume_unit;
@@ -369,7 +398,7 @@ async function handlePhoto(kind, file, picked){
 function setAI(id, aiId, val, digits){
   if (val==null || val==='' || isNaN(+val)) return false;
   const el = $(id);
-  el.value = String(parseFloat((+val).toFixed(digits)));
+  el.value = fmtIn(+val, digits);
   el.classList.add('aifill'); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
   $(aiId).textContent = '✓ read'; return true;
 }
@@ -401,15 +430,16 @@ function renderAIBox(){
 }
 
 // ---------- form
+['#liters','#total','#ppl','#odo'].forEach(id => $(id).addEventListener('input', e => e.target.style.borderColor=''));
 ['#liters','#total','#ppl'].forEach(id => $(id).addEventListener('input', e => { $(id.replace('#','#ai-')).textContent='✎ edited'; e.target.classList.remove('aifill'); autoCalc(e.target.id); checkWarnings(); }));
 $('#odo').addEventListener('input', e => { $('#ai-odo').textContent='✎ edited'; e.target.classList.remove('aifill'); checkWarnings(); });
 $('#ts').addEventListener('change', () => { $('#ts').classList.remove('aifill'); if (S.tsFrom) $('#ai-ts').textContent='✎ edited'; checkWarnings(); });
 function autoCalc(changed){
-  const L = parseFloat($('#liters').value), T = parseFloat($('#total').value), P = parseFloat($('#ppl').value);
-  const calc = (id, v) => { const el=$(id); if (el.value===v) return; el.value=v; el.classList.remove('aifill'); $(id.replace('#','#ai-')).textContent='= calculated'; };
-  if (L>0 && T>0 && (changed==='total' || changed==='liters')) calc('#ppl', (T/L).toFixed(2));
-  else if (L>0 && T>0 && !P) calc('#ppl', (T/L).toFixed(2));
-  else if (L>0 && P>0 && !T) calc('#total', (L*P).toFixed(2));
+  const L = num('#liters'), T = num('#total'), P = num('#ppl');
+  const calc = (id, n) => { const el=$(id), v=fmtIn(n, 2); if (el.value===v) return; el.value=v; el.classList.remove('aifill'); $(id.replace('#','#ai-')).textContent='= calculated'; };
+  if (L>0 && T>0 && (changed==='total' || changed==='liters')) calc('#ppl', T/L);
+  else if (L>0 && T>0 && !P) calc('#ppl', T/L);
+  else if (L>0 && P>0 && !T) calc('#total', L*P);
 }
 function lastFillBefore(){
   const ts = $('#ts').value;
@@ -417,7 +447,8 @@ function lastFillBefore(){
 }
 function checkWarnings(){
   const w = [];
-  const L = parseFloat($('#liters').value), T = parseFloat($('#total').value), P = parseFloat($('#ppl').value), O = parseFloat($('#odo').value);
+  updatePreview();
+  const L = num('#liters'), T = num('#total'), P = num('#ppl'), O = num('#odo');
   if (L>0 && T>0 && P>0 && Math.abs(L*P - T) > Math.max(1, T*0.02)) w.push(`The numbers don't add up: ${nf(L,2)} ${vLab()} × ${nf(P,2)} = ${nf(L*P,2)} ${S.cur}, but the total is ${nf(T,2)} ${S.cur}.`);
   const pa = S.ai.pump;
   if (pa && pa.volume_unit && pa.volume_unit!=='unknown' && pa.volume_unit !== vLab()) w.push(`The pump seems to show ${pa.volume_unit}, but the app is set to ${vLab()}. Check the numbers or change the volume unit under Settings.`);
@@ -453,10 +484,12 @@ function resetForm(){
 }
 $('#cancel-edit').onclick = resetForm;
 $('#save').onclick = async () => {
+  const badIds = ['#liters','#total','#ppl','#odo'].filter(id => $(id).value.trim() && num(id)==null);
+  if (badIds.length) { toast('Some numbers could not be read – check the highlighted fields'); badIds.forEach(id => $(id).style.borderColor='var(--bad)'); return; }
   const body = {
     id: S.editId, vehicle_id: S.vid, ts: $('#ts').value,
-    liters: volIn($('#liters').value), price_total: $('#total').value, price_per_l: perVolIn($('#ppl').value),
-    odometer: $('#odo').value, full_tank: $('#full').checked, missed_previous: $('#missed').checked,
+    liters: volIn(num('#liters')), price_total: num('#total'), price_per_l: perVolIn(num('#ppl')),
+    odometer: num('#odo'), full_tank: $('#full').checked, missed_previous: $('#missed').checked,
     fuel_type: $('#fuel').value.trim(), station: $('#station').value.trim(), note: $('#note').value.trim(),
     img_pump: S.shots.pump, img_odo: S.shots.odo, ai_pump: S.ai.pump, ai_odo: S.ai.odo,
   };
@@ -471,14 +504,13 @@ function editFill(f){
   showTab('tank'); clearAIState();
   S.editId = f.id; S.shots = {pump:f.img_pump, odo:f.img_odo};
   try { S.ai = {pump: f.ai_pump?JSON.parse(f.ai_pump):null, odo: f.ai_odo?JSON.parse(f.ai_odo):null}; } catch(e){ S.ai={pump:null,odo:null}; }
-  const r2 = (x, d) => x==null ? '' : String(parseFloat(x.toFixed(d)));
-  $('#ts').value = f.ts; $('#liters').value = r2(vol(f.liters),2); $('#total').value = f.price_total ?? ''; $('#ppl').value = r2(perVol(f.price_per_l),3);
-  $('#odo').value = f.odometer ?? ''; $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;
+  $('#ts').value = f.ts; $('#liters').value = fmtIn(vol(f.liters),2); $('#total').value = fmtIn(f.price_total,2); $('#ppl').value = fmtIn(perVol(f.price_per_l),3);
+  $('#odo').value = fmtIn(f.odometer,1); $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;
   $('#fuel').value = f.fuel_type||''; $('#station').value = f.station||''; $('#note').value = f.note||'';
   ['pump','odo'].forEach(k => { const b=$('#shot-'+k), im=b.querySelector('img'), fn=k==='pump'?f.img_pump:f.img_odo;
     if (fn){ im.src='api/img/'+fn; im.classList.remove('hide'); b.classList.add('has'); b.querySelector('.status').textContent='Saved photo'; } else { im.classList.add('hide'); b.classList.remove('has'); } });
   $('#form-title').textContent = 'Edit refuel'; $('#cancel-edit').classList.remove('hide'); updateSave();
-  scrollTo(0,0);
+  updatePreview(); scrollTo(0,0);
 }
 
 // ---------- log
@@ -587,9 +619,9 @@ function carForm(v){
     <div class="f"><label>Name</label><input type="text" name="name" value="${esc(v.name)}" placeholder="e.g. Jeep, Family car"></div>
     <div class="grid2">
       <div class="f"><label>Odometer shows</label><select name="odo_unit"><option value="km" ${v.odo_unit!=='mi'?'selected':''}>km</option><option value="mi" ${v.odo_unit==='mi'?'selected':''}>miles</option></select></div>
-      <div class="f"><label>Tank size (${vLab()})</label><input type="number" inputmode="decimal" name="tank_l" value="${v.tank_l ? parseFloat(vol(v.tank_l).toFixed(1)) : ''}" placeholder="optional"></div>
+      <div class="f"><label>Tank size (${vLab()})</label><input type="text" inputmode="decimal" autocomplete="off" name="tank_l" value="${v.tank_l ? fmtIn(vol(v.tank_l),1) : ''}" placeholder="optional"></div>
     </div>
-    <div class="f"><label>Odometer rolls over at</label><input type="number" name="odo_rollover" value="${v.odo_rollover || ''}" placeholder="never">
+    <div class="f"><label>Odometer rolls over at</label><input type="text" inputmode="decimal" autocomplete="off" name="odo_rollover" value="${v.odo_rollover ? fmtIn(v.odo_rollover,0) : ''}" placeholder="never">
       <div class="hint">Old mechanical odometers with 5 digits roll over at 100000. Leave empty if it never rolls over.</div></div>
     <label class="check"><input type="checkbox" name="active" ${v.active?'checked':''}><span>Show in the vehicle list</span></label>
     <div style="display:flex;justify-content:space-between;gap:8px">
@@ -602,7 +634,7 @@ function bindCarForms(){
   $$('[data-savecar]').forEach(b => b.onclick = async () => {
     const c = b.closest('[data-car]'), g = n => c.querySelector(`[name=${n}]`);
     try {
-      const r = await api('api/vehicles', {method:'POST', body: JSON.stringify({id: c.dataset.car || null, name: g('name').value, odo_unit: g('odo_unit').value, tank_l: volIn(g('tank_l').value), odo_rollover: g('odo_rollover').value, active: g('active').checked})});
+      const r = await api('api/vehicles', {method:'POST', body: JSON.stringify({id: c.dataset.car || null, name: g('name').value, odo_unit: g('odo_unit').value, tank_l: volIn(parseNum(g('tank_l').value)), odo_rollover: parseNum(g('odo_rollover').value), active: g('active').checked})});
       toast(c.dataset.car ? 'Saved' : 'Vehicle added');
       if (!c.dataset.car) { S.vid = r.id; try{localStorage.setItem('ft_vid', S.vid)}catch(e){} }
       const first = S.vehicles.filter(x=>x.active).length === 0;
@@ -627,7 +659,7 @@ $('#add-car').onclick = addCarForm;
 async function renderSettings(){
   const c = S.cfg;
   $('#set-currency').value = c.currency; $('#set-distance').value = c.distance_unit; $('#set-volume').value = c.volume_unit;
-  $('#set-warn').value = c.warn_distance ?? ''; $('#set-publish').checked = !!c.publish_sensors;
+  $('#set-warn').value = fmtIn(c.warn_distance, 1); $('#set-publish').checked = !!c.publish_sensors;
   updateConsOptions(); $('#set-cons').value = c.consumption_style;
   $('#set-fuels').innerHTML = ''; (c.fuel_types||[]).forEach(f => addFuelRow(f));
   let ents = []; try { ents = await api('api/ai_entities'); } catch(e){}
@@ -646,7 +678,7 @@ function updateConsOptions(){
 function addFuelRow(f){
   f = f || {name:'', co2_kg_per_l:''};
   const d = document.createElement('div'); d.className = 'ftrow';
-  d.innerHTML = `<input type="text" data-fn value="${esc(f.name)}" placeholder="Fuel name"><input type="number" step="0.01" data-fc value="${f.co2_kg_per_l ?? ''}" placeholder="kg/L"><button class="btn small danger" aria-label="Remove">✕</button>`;
+  d.innerHTML = `<input type="text" data-fn value="${esc(f.name)}" placeholder="Fuel name"><input type="text" inputmode="decimal" autocomplete="off" data-fc value="${f.co2_kg_per_l!=null && f.co2_kg_per_l!=='' ? fmtIn(+f.co2_kg_per_l,3) : ''}" placeholder="kg/L"><button class="btn small danger" aria-label="Remove">✕</button>`;
   d.querySelector('button').onclick = () => d.remove();
   $('#set-fuels').appendChild(d);
 }
@@ -655,9 +687,9 @@ $('#save-settings').onclick = async () => {
   try {
     S.cfg = await api('api/settings', {method:'POST', body: JSON.stringify({
       currency: $('#set-currency').value, distance_unit: $('#set-distance').value, volume_unit: $('#set-volume').value,
-      consumption_style: $('#set-cons').value, warn_distance: $('#set-warn').value, ai_task_entity: $('#set-ai').value,
+      consumption_style: $('#set-cons').value, warn_distance: parseNum($('#set-warn').value), ai_task_entity: $('#set-ai').value,
       publish_sensors: $('#set-publish').checked,
-      fuel_types: $$('#set-fuels .ftrow').map(r => ({name: r.querySelector('[data-fn]').value, co2_kg_per_l: r.querySelector('[data-fc]').value})),
+      fuel_types: $$('#set-fuels .ftrow').map(r => ({name: r.querySelector('[data-fn]').value, co2_kg_per_l: parseNum(r.querySelector('[data-fc]').value)})),
     })});
     S.cur = S.cfg.currency; applyUnitLabels(); toast('Settings saved'); renderSettings();
   } catch(e){ toast(e.message); }

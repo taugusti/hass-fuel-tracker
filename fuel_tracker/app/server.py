@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
 MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
 MEDIA_SUB = "fuel_tracker"

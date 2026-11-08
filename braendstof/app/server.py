@@ -44,7 +44,7 @@ def _read_token():
 TOKEN = _read_token()
 PORT = int(os.environ.get("BS_PORT", "8099"))
 DEV = os.environ.get("BS_DEV") == "1"
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 KM_PER_MI = 1.609344
 CO2_KG_PER_L = 2.31  # ca. for benzin (forbrænding)
 

@@ -52,6 +52,13 @@ input[type=text],input[type=number],input[type=datetime-local],select,textarea{w
 .check input{width:22px;height:22px;margin:0}
 .check small{display:block;color:var(--muted);font-size:12px}
 .ai{font-size:12px;color:var(--accent);margin-left:4px}
+input.aifill{background:var(--accent-soft);border-color:var(--accent);border-width:2px}
+.aibox{background:var(--accent-soft);border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+.aibox b{color:var(--accent)}
+.aibox .n{margin-top:6px;color:var(--warn)}
+.aibox .reading{font-size:17px;font-weight:600;margin-top:4px}
+@keyframes flash{0%{box-shadow:0 0 0 4px var(--accent)}100%{box-shadow:0 0 0 0 transparent}}
+input.flash{animation:flash 1.4s ease-out}
 .warn{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:8px 10px;font-size:14px;margin:8px 0}
 .kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
 @media(min-width:600px){.kpis{grid-template-columns:repeat(4,1fr)}}
@@ -116,6 +123,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 
     <div class="card">
       <h2 id="form-title">Ny tankning</h2>
+      <div id="ai-box"></div>
       <div class="f"><label>Tidspunkt</label><input type="datetime-local" id="ts"></div>
       <div class="grid3">
         <div class="f"><label>Liter<span class="ai" id="ai-liters"></span></label><input type="number" inputmode="decimal" step="0.01" id="liters"></div>
@@ -177,7 +185,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 <script>
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
-const S = {vehicles:[], vid:null, tab:'tank', shots:{pump:null, odo:null}, ai:{pump:null, odo:null}, editId:null, fills:[], stats:null, busy:0};
+const S = {aiMsg:{pump:null, odo:null}, vehicles:[], vid:null, tab:'tank', shots:{pump:null, odo:null}, ai:{pump:null, odo:null}, editId:null, fills:[], stats:null, busy:0};
 const nf = (v, d=1) => v==null||isNaN(v) ? '–' : Number(v).toLocaleString('da-DK',{minimumFractionDigits:d, maximumFractionDigits:d});
 const ni = v => v==null ? '–' : Math.round(v).toLocaleString('da-DK');
 const fdate = ts => { if(!ts) return '–'; const d=new Date(ts); return d.toLocaleDateString('da-DK',{day:'numeric',month:'short',year:'numeric'}); };
@@ -260,8 +268,10 @@ async function handlePhoto(kind, file){
 
 function setAI(id, aiId, val, digits){
   if (val==null || val==='' || isNaN(+val)) return false;
-  $(id).value = String(parseFloat((+val).toFixed(digits)));
-  $(aiId).textContent = '✓ AI'; return true;
+  const el = $(id);
+  el.value = String(parseFloat((+val).toFixed(digits)));
+  el.classList.add('aifill'); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  $(aiId).textContent = '✓ aflæst'; return true;
 }
 function applyAI(kind, d){
   const st = $('#shot-'+kind+' .status');
@@ -271,21 +281,31 @@ function applyAI(kind, d){
     const c = setAI('#ppl','#ai-ppl', d.price_per_liter, 3);
     if (d.fuel_type && !$('#fuel').value) $('#fuel').value = d.fuel_type;
     autoCalc();
-    st.textContent = (a||b||c) ? `${nf(d.liters,2)} L · ${nf(d.total_price,2)} kr` : 'Ingen tal fundet – tast selv';
+    st.textContent = (a||b||c) ? '✓ Overført til registreringen' : 'Ingen tal fundet – tast selv';
+    S.aiMsg.pump = {ok:(a||b||c), title:'Pumpe-display', reading: (a||b||c) ? [d.liters!=null?nf(d.liters,2)+' L':null, d.total_price!=null?nf(d.total_price,2)+' kr':null, d.price_per_liter!=null?nf(d.price_per_liter,2)+' kr/L':null].filter(Boolean).join(' · ') : 'Kunne ikke aflæses – tast tallene selv', note:d.note};
   } else {
     const ok = setAI('#odo','#ai-odo', d.reading, 1);
-    st.textContent = ok ? `${nf(d.reading, d.has_tenths?1:0)} ${d.unit && d.unit!=='ukendt' ? d.unit : ''}` : 'Kunne ikke læse tælleren – tast selv';
+    st.textContent = ok ? '✓ Overført til registreringen' : 'Kunne ikke læse tælleren – tast selv';
+    S.aiMsg.odo = {ok, title:'Km-tæller', reading: ok ? `${nf(d.reading, d.has_tenths?1:0)} ${d.unit && d.unit!=='ukendt' ? d.unit : ''}` : 'Kunne ikke aflæses – tast tallet selv', note:d.note};
   }
-  if (d.note) st.textContent += ' — ' + d.note;
+  renderAIBox();
+  setTimeout(() => $('#form-title').closest('.card').scrollIntoView({behavior:'smooth', block:'start'}), 150);
+}
+function renderAIBox(){
+  const m = ['pump','odo'].map(k => S.aiMsg[k]).filter(Boolean);
+  $('#ai-box').innerHTML = !m.length ? '' : `<div class="aibox"><b>Claude har udfyldt de grønne felter.</b> Tjek dem og ret hvis noget er forkert – intet gemmes før du trykker Gem.
+    ${m.map(x => `<div class="reading">${esc(x.title)}: ${esc(x.reading)}</div>${x.note ? `<div class="n">⚠️ ${esc(x.note)}</div>` : ''}`).join('')}</div>`;
 }
 
 // ---------- formular
-['#liters','#total','#ppl'].forEach(id => $(id).addEventListener('input', e => { $(id.replace('#','#ai-')).textContent=''; autoCalc(e.target.id); checkWarnings(); }));
-$('#odo').addEventListener('input', () => { $('#ai-odo').textContent=''; checkWarnings(); });
+['#liters','#total','#ppl'].forEach(id => $(id).addEventListener('input', e => { $(id.replace('#','#ai-')).textContent='✎ rettet'; e.target.classList.remove('aifill'); autoCalc(e.target.id); checkWarnings(); }));
+$('#odo').addEventListener('input', e => { $('#ai-odo').textContent='✎ rettet'; e.target.classList.remove('aifill'); checkWarnings(); });
 function autoCalc(changed){
   const L = parseFloat($('#liters').value), T = parseFloat($('#total').value), P = parseFloat($('#ppl').value);
-  if (L>0 && T>0 && (!P || changed==='total' || changed==='liters') && changed!=='ppl') $('#ppl').value = (T/L).toFixed(2);
-  else if (L>0 && P>0 && !T) $('#total').value = (L*P).toFixed(2);
+  const calc = (id, v) => { const el=$(id); if (el.value===v) return; el.value=v; el.classList.remove('aifill'); $(id.replace('#','#ai-')).textContent='= beregnet'; };
+  if (L>0 && T>0 && changed && (changed==='total' || changed==='liters')) calc('#ppl', (T/L).toFixed(2));
+  else if (L>0 && T>0 && !P) calc('#ppl', (T/L).toFixed(2));
+  else if (L>0 && P>0 && !T) calc('#total', (L*P).toFixed(2));
 }
 function lastFillBefore(){
   const ts = $('#ts').value;
@@ -316,7 +336,8 @@ function fillStationList(){
 function resetForm(){
   S.editId=null; S.shots={pump:null,odo:null}; S.ai={pump:null,odo:null};
   ['#liters','#total','#ppl','#odo','#station','#note','#fuel'].forEach(id=>$(id).value='');
-  $$('.ai').forEach(e=>e.textContent='');
+  $$('.ai').forEach(e=>e.textContent=''); $$('input.aifill').forEach(e=>e.classList.remove('aifill','flash'));
+  S.aiMsg = {pump:null, odo:null}; renderAIBox();
   $('#ts').value = nowLocal(); $('#full').checked = true; $('#missed').checked = false;
   ['pump','odo'].forEach(k=>{ const b=$('#shot-'+k); b.classList.remove('has'); b.querySelector('img').classList.add('hide'); b.querySelector('.status').textContent = k==='pump'?'Liter og pris':'Kilometerstand'; });
   $('#form-title').textContent='Ny tankning'; $('#cancel-edit').classList.add('hide'); $('#warns').innerHTML=''; updateSave();
@@ -341,6 +362,7 @@ $('#save').onclick = async () => {
 function editFill(f){
   showTab('tank');
   S.editId = f.id; S.shots = {pump:f.img_pump, odo:f.img_odo};
+  $$('input.aifill').forEach(e=>e.classList.remove('aifill','flash')); $$('.ai').forEach(e=>e.textContent=''); S.aiMsg={pump:null,odo:null}; renderAIBox();
   try { S.ai = {pump: f.ai_pump?JSON.parse(f.ai_pump):null, odo: f.ai_odo?JSON.parse(f.ai_odo):null}; } catch(e){ S.ai={pump:null,odo:null}; }
   $('#ts').value = f.ts; $('#liters').value = f.liters ?? ''; $('#total').value = f.price_total ?? ''; $('#ppl').value = f.price_per_l ?? '';
   $('#odo').value = f.odometer ?? ''; $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;

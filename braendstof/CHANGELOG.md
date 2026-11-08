@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.3 – 2026-11-08
+- Aflæste tal overføres synligt til registreringen: grønne felter, opsummering med Claudes bemærkninger, siden ruller ned til formularen. Felter markeres "rettet" eller "beregnet". Intet gemmes før Gem.
+
 ## 0.1.2 – 2026-11-08
 - Omdøbt til Fuel Tracker (også i sidemenuen).
 

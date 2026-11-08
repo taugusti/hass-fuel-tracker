@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.4.2 – 2026-11-08
+- The page reloads itself when a newer version of the app is installed (the HA app keeps old pages open). The version next to the title is the version of the page you are looking at.
+
 ## 0.4.1 – 2026-11-08
 - Version number shown next to the title.
 

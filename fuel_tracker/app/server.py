@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
 MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
 MEDIA_SUB = "fuel_tracker"
@@ -666,7 +666,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if method == "GET" and p in ("/", "/index.html"):
                 with open(os.path.join(STATIC_DIR, "index.html"), "rb") as f:
-                    return self.send_bytes(f.read(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
+                    page = f.read().replace(b"__APP_VERSION__", VERSION.encode())
+                return self.send_bytes(page, "text/html; charset=utf-8", {"Cache-Control": "no-store, max-age=0"})
             if p == "/api/status":
                 return self.send_json({"has_token": bool(TOKEN), "version": VERSION, "settings": get_settings()})
             if p == "/api/settings":

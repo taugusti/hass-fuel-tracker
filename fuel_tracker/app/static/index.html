@@ -223,6 +223,20 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const LOC = navigator.language || 'en';
+const APP_VERSION = '__APP_VERSION__';   // filled in by the server when the page is served
+// Reload automatically when a newer version of the app has been installed (the HA app keeps old pages open)
+async function checkVersion(){
+  try {
+    const st = await (await fetch('api/status', {cache:'no-store'})).json();
+    if (st.version && st.version !== APP_VERSION) {
+      let tried = null; try { tried = sessionStorage.getItem('ft_reload'); } catch(e){}
+      if (tried !== st.version) { try { sessionStorage.setItem('ft_reload', st.version); } catch(e){} location.reload(); return true; }
+    }
+  } catch(e){}
+  return false;
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && !S.busy) checkVersion(); });
+setInterval(() => { if (!document.hidden && !S.busy) checkVersion(); }, 60000);
 const S = {cfg:null, vehicles:[], vid:null, tab:'tank', cur:'kr', shots:{pump:null, odo:null}, ai:{pump:null, odo:null}, aiMsg:{pump:null, odo:null}, tsFrom:null, editId:null, fills:[], busy:0};
 const nf = (v, d=1) => v==null||isNaN(v) ? '–' : Number(v).toLocaleString(LOC,{minimumFractionDigits:d, maximumFractionDigits:d});
 const ni = v => v==null ? '–' : Math.round(v).toLocaleString(LOC);
@@ -747,7 +761,8 @@ $('#save-settings').onclick = async () => {
   try {
     const st = await api('api/status');
     S.cfg = st.settings; S.cur = S.cfg.currency; applyUnitLabels();
-    $('#ver').textContent = `Fuel Tracker v${st.version}`; $('#hver').textContent = 'v' + st.version;
+    if (st.version !== APP_VERSION && await checkVersion()) return;
+    $('#ver').textContent = `Fuel Tracker v${APP_VERSION}`; $('#hver').textContent = 'v' + APP_VERSION;
     await loadVehicles(); resetForm();
     // start on statistics when the selected vehicle already has refuels
     const v = veh(); showTab(v && v.fill_count ? 'stats' : 'tank');

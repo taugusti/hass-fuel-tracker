@@ -1,5 +1,5 @@
-name: Brændstof
-version: "0.1.1"
+name: Fuel Tracker
+version: "0.1.2"
 slug: braendstof
 description: Benzinlog for jeeperne – tag billede af pumpe og km-tæller, Claude aflæser tallene
 url: https://github.com/taugusti/hass-fuel-tracker
@@ -12,7 +12,7 @@ boot: auto
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:gas-station
-panel_title: Brændstof
+panel_title: Fuel Tracker
 homeassistant_api: true
 map:
   - type: media

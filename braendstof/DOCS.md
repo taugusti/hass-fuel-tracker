@@ -1,4 +1,4 @@
-# Brændstof
+# Fuel Tracker
 
 Benzinlog for jeeperne. Tag et billede af pumpens display og bilens km-tæller – Claude (via HA's AI Task) aflæser tallene, du tjekker dem og gemmer.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Brændstof – benzinlog for jeeperne (Home Assistant app/add-on).
+"""Fuel Tracker – fuel log for Home Assistant (app/add-on).
 
-Kun Pythons standardbibliotek. Data i SQLite (/data/braendstof.db),
-billeder i /media/braendstof (så HA's AI Task kan læse dem som media-source).
+Python standard library only. Data in SQLite (/data/fuel_tracker.db),
+photos in /media/fuel_tracker (so HA's AI Task can read them as media-source).
 """
 import base64
 import csv
@@ -16,43 +16,46 @@ import threading
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-DATA_DIR = os.environ.get("BS_DATA_DIR", "/data")
-MEDIA_ROOT = os.environ.get("BS_MEDIA_ROOT", "/media")
-MEDIA_SUB = "braendstof"
+VERSION = "0.2.0"
+DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
+MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
+MEDIA_SUB = "fuel_tracker"
 MEDIA_DIR = os.path.join(MEDIA_ROOT, MEDIA_SUB)
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-HA_API = os.environ.get("BS_HA_API", "http://supervisor/core/api")
-def _read_token():
-    tok = os.environ.get("SUPERVISOR_TOKEN", "")
-    if tok:
-        return tok
-    # s6-overlay giver ikke altid containerens miljø videre til CMD
-    for path in ("/run/s6/container_environment/SUPERVISOR_TOKEN",
-                 "/var/run/s6/container_environment/SUPERVISOR_TOKEN"):
+HA_API = os.environ.get("FT_HA_API", "http://supervisor/core/api")
+PORT = int(os.environ.get("FT_PORT", "8099"))
+DEV = os.environ.get("FT_DEV") == "1"
+KM_PER_MI = 1.609344
+CO2_KG_PER_L = {"petrol": 2.31, "diesel": 2.68}  # approx. tank-to-wheel
+
+
+def _container_env(name):
+    val = os.environ.get(name, "")
+    if val:
+        return val
+    # s6-overlay does not always pass the container environment on to CMD
+    for base in ("/run/s6/container_environment", "/var/run/s6/container_environment"):
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(os.path.join(base, name), encoding="utf-8") as f:
                 return f.read().strip()
         except OSError:
             pass
     return ""
 
 
-TOKEN = _read_token()
-PORT = int(os.environ.get("BS_PORT", "8099"))
-DEV = os.environ.get("BS_DEV") == "1"
-VERSION = "0.1.4"
-KM_PER_MI = 1.609344
-CO2_KG_PER_L = 2.31  # ca. for benzin (forbrænding)
-
-os.environ.setdefault("TZ", "Europe/Copenhagen")
-try:
-    time.tzset()
-except AttributeError:
-    pass
+TOKEN = _container_env("SUPERVISOR_TOKEN")
+_tz = _container_env("TZ")
+if _tz:
+    os.environ["TZ"] = _tz
+    try:
+        time.tzset()
+    except AttributeError:
+        pass
 
 
 def load_options():
@@ -66,8 +69,10 @@ def load_options():
 OPTIONS = load_options()
 AI_ENTITY = OPTIONS.get("ai_task_entity") or "ai_task.claude_ai_task"
 PUBLISH = OPTIONS.get("publish_sensors", True)
+CURRENCY = (OPTIONS.get("currency") or "kr").strip() or "kr"
 
 DB_LOCK = threading.Lock()
+PUBLISH_LOCK = threading.Lock()
 
 
 def log(*a):
@@ -77,7 +82,7 @@ def log(*a):
 # ---------------------------------------------------------------- database
 
 def db():
-    con = sqlite3.connect(os.path.join(DATA_DIR, "braendstof.db"))
+    con = sqlite3.connect(os.path.join(DATA_DIR, "fuel_tracker.db"))
     con.row_factory = sqlite3.Row
     return con
 
@@ -92,10 +97,9 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 odo_unit TEXT NOT NULL DEFAULT 'km',
-                odo_rollover REAL NOT NULL DEFAULT 100000,
+                odo_rollover REAL NOT NULL DEFAULT 0,
                 tank_l REAL,
-                active INTEGER NOT NULL DEFAULT 1,
-                sort INTEGER NOT NULL DEFAULT 0
+                active INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS fills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,10 +122,6 @@ def init_db():
             );
             """
         )
-        n = con.execute("SELECT COUNT(*) FROM vehicles").fetchone()[0]
-        if n == 0:
-            con.execute("INSERT INTO vehicles(name, sort) VALUES ('CJ-3B 1955', 1)")
-            con.execute("INSERT INTO vehicles(name, sort) VALUES ('Willys Truck 1958', 2)")
 
 
 def rows(sql, args=()):
@@ -131,8 +131,7 @@ def rows(sql, args=()):
 
 def execute(sql, args=()):
     with DB_LOCK, db() as con:
-        cur = con.execute(sql, args)
-        return cur.lastrowid
+        return con.execute(sql, args).lastrowid
 
 
 def get_vehicle(vid):
@@ -140,12 +139,19 @@ def get_vehicle(vid):
     return r[0] if r else None
 
 
+def delete_image(name):
+    if name and re.fullmatch(r"[A-Za-z0-9_\-]+\.jpg", name):
+        try:
+            os.remove(os.path.join(MEDIA_DIR, name))
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------- HA API
 
 def ha_request(method, path, payload=None, timeout=90):
-    url = HA_API + path
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
+    req = urllib.request.Request(HA_API + path, data=data, method=method)
     req.add_header("Authorization", "Bearer " + TOKEN)
     req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -153,40 +159,41 @@ def ha_request(method, path, payload=None, timeout=90):
         return json.loads(body) if body else None
 
 
-PUMP_INSTRUCTIONS = """Billedet viser displayet på en tankstander (benzinpumpe) i Danmark.
-Aflæs:
-- liters: antal liter der er tanket (feltet hedder typisk "Liter", "Volumen" eller "Ltr").
-- total_price: beløbet i kr. der skal betales (typisk "Beløb", "Kr", "Pris" eller "Total").
-- price_per_liter: literprisen i kr. (typisk "Kr/L", "Pris pr. liter").
-- fuel_type: brændstoftype hvis den kan ses (fx "Blyfri 95", "E10", "Diesel"), ellers tom.
-Danske displays bruger komma som decimaltegn: "38,47" betyder 38.47. Returner tal med punktum.
-Er et tal ikke læseligt, så udelad feltet hellere end at gætte.
-Skriv i note (på dansk, kort) hvis noget var svært at læse eller tallene ikke passer sammen."""
+PUMP_INSTRUCTIONS = """The image shows the display of a fuel pump at a filling station.
+Read:
+- liters: the volume dispensed in liters (often labelled "Liter", "Litres", "Volume", "Ltr").
+- total_price: the amount to pay (often labelled "Amount", "Total", "Sale", "Beløb", "Betrag", "Kr", "€").
+- price_per_liter: the unit price per liter.
+- fuel_type: the fuel grade if visible (e.g. "Petrol 95 E10", "Diesel"), otherwise leave empty.
+Many displays use a comma as decimal separator: "38,47" means 38.47. Return numbers with a dot.
+If a number cannot be read reliably, omit the field rather than guessing.
+Use note (short, in English) to mention anything hard to read or numbers that do not add up."""
 
-ODO_INSTRUCTIONS = """Billedet viser speedometer/km-tæller (odometer) på en gammel Willys jeep (1950'erne).
-Tælleren er typisk mekaniske tromler. Aflæs den samlede kilometerstand (IKKE en tripmåler).
-- reading: tallet på tælleren som et tal. Hvis den yderste højre tromle tydeligvis er tiendedele
-  (anden farve, ofte hvid/rød baggrund), så medtag den som decimal (fx 45678.3) og sæt has_tenths=true.
-- unit: "km" hvis skiven siger km/KILOMETER, "miles" hvis den siger MILES/MPH, ellers "ukendt".
-Hvis en tromle står midt mellem to tal, så brug det laveste tal.
-Udelad reading hvis tallet ikke kan læses sikkert. Skriv i note (på dansk, kort) om usikkerheder."""
+ODO_INSTRUCTIONS = """The image shows the odometer of a vehicle. It may be a digital display or
+mechanical number drums on an older vehicle. Read the TOTAL distance (not a trip meter).
+- reading: the odometer value as a number. If the rightmost drum/digit is clearly tenths
+  (different colour, often white or red background, or after a decimal point), include it as a
+  decimal (e.g. 45678.3) and set has_tenths=true.
+- unit: "km" if the display says km/KILOMETERS, "miles" if it says MILES/mi/MPH, otherwise "unknown".
+If a drum sits between two digits, use the lower digit.
+Omit reading if it cannot be read reliably. Use note (short, in English) to mention any uncertainty."""
 
 NUM = {"number": {"mode": "box", "step": "any"}}
 TXT = {"text": {}}
 BOOL = {"boolean": {}}
 
 PUMP_STRUCTURE = {
-    "liters": {"selector": NUM, "description": "Antal liter tanket"},
-    "total_price": {"selector": NUM, "description": "Beløb i kr."},
-    "price_per_liter": {"selector": NUM, "description": "Literpris i kr."},
-    "fuel_type": {"selector": TXT, "description": "Brændstoftype"},
-    "note": {"selector": TXT, "description": "Kort note om usikkerheder"},
+    "liters": {"selector": NUM, "description": "Liters dispensed"},
+    "total_price": {"selector": NUM, "description": "Total amount"},
+    "price_per_liter": {"selector": NUM, "description": "Price per liter"},
+    "fuel_type": {"selector": TXT, "description": "Fuel grade"},
+    "note": {"selector": TXT, "description": "Short note about uncertainties"},
 }
 ODO_STRUCTURE = {
-    "reading": {"selector": NUM, "description": "Kilometerstand på tælleren"},
-    "has_tenths": {"selector": BOOL, "description": "Om reading indeholder tiendedele"},
-    "unit": {"selector": TXT, "description": "km, miles eller ukendt"},
-    "note": {"selector": TXT, "description": "Kort note om usikkerheder"},
+    "reading": {"selector": NUM, "description": "Odometer reading"},
+    "has_tenths": {"selector": BOOL, "description": "Whether reading includes tenths"},
+    "unit": {"selector": TXT, "description": "km, miles or unknown"},
+    "note": {"selector": TXT, "description": "Short note about uncertainties"},
 }
 
 
@@ -200,44 +207,39 @@ def _extract_json(text):
         return {}
 
 
+def _response_data(res):
+    res = res or {}
+    data = res.get("service_response", res).get("data")
+    if isinstance(data, str):
+        data = _extract_json(data)
+    return data if isinstance(data, dict) else {}
+
+
 def ai_read(kind, filename):
     instructions = PUMP_INSTRUCTIONS if kind == "pump" else ODO_INSTRUCTIONS
     structure = PUMP_STRUCTURE if kind == "pump" else ODO_STRUCTURE
-    attachment = {
-        "media_content_id": f"media-source://media_source/local/{MEDIA_SUB}/{filename}",
-        "media_content_type": "image/jpeg",
-    }
     base = {
-        "task_name": "Aflæs tankdisplay" if kind == "pump" else "Aflæs km-tæller",
+        "task_name": "Read fuel pump display" if kind == "pump" else "Read odometer",
         "entity_id": AI_ENTITY,
-        "attachments": [attachment],
+        "attachments": [{
+            "media_content_id": f"media-source://media_source/local/{MEDIA_SUB}/{filename}",
+            "media_content_type": "image/jpeg",
+        }],
     }
     path = "/services/ai_task/generate_data?return_response"
     try:
-        res = ha_request("POST", path, dict(base, instructions=instructions, structure=structure))
-        data = (res or {}).get("service_response", res or {}).get("data")
-        if isinstance(data, str):
-            data = _extract_json(data)
-        return data or {}, None
+        return _response_data(ha_request("POST", path, dict(base, instructions=instructions, structure=structure))), None
     except urllib.error.HTTPError as e:
-        err = e.read().decode("utf-8", "replace")[:500]
-        log("AI med struktur fejlede", e.code, err, "– prøver med fri tekst")
-    except Exception as e:  # netværk osv.
-        log("AI-fejl", repr(e))
+        log("AI call with structure failed", e.code, e.read().decode("utf-8", "replace")[:500], "- retrying as free text")
+    except Exception as e:
+        log("AI error", repr(e))
         return {}, str(e)
-    # Fald tilbage: bed om JSON som tekst
     try:
-        keys = ", ".join(structure.keys())
-        res = ha_request(
-            "POST", path,
-            dict(base, instructions=instructions + f"\nSvar KUN med ét JSON-objekt med nøglerne: {keys}."),
-        )
-        data = (res or {}).get("service_response", res or {}).get("data")
-        if isinstance(data, dict):
-            return data, None
-        return _extract_json(str(data)), None
+        keys = ", ".join(structure)
+        res = ha_request("POST", path, dict(base, instructions=instructions + f"\nReply ONLY with one JSON object with the keys: {keys}."))
+        return _response_data(res), None
     except urllib.error.HTTPError as e:
-        return {}, f"HA svarede {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"
+        return {}, f"Home Assistant returned {e.code}: {e.read().decode('utf-8', 'replace')[:300]}"
     except Exception as e:
         return {}, str(e)
 
@@ -249,7 +251,7 @@ def to_num(v):
         return float(v)
     s = str(v).strip().replace(" ", "")
     if "," in s and "." in s:
-        s = s.replace(".", "").replace(",", ".")
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") else s.replace(",", "")
     else:
         s = s.replace(",", ".")
     try:
@@ -258,27 +260,27 @@ def to_num(v):
         return None
 
 
-# ---------------------------------------------------------------- statistik
+# ---------------------------------------------------------------- statistics
 
 def slugify(name):
     s = name.lower()
-    for a, b in (("æ", "ae"), ("ø", "oe"), ("å", "aa")):
+    for a, b in (("æ", "ae"), ("ø", "oe"), ("å", "aa"), ("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
         s = s.replace(a, b)
-    return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "bil"
+    return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "vehicle"
+
+
+def co2_factor(fuel_type):
+    return CO2_KG_PER_L["diesel"] if "diesel" in (fuel_type or "").lower() else CO2_KG_PER_L["petrol"]
 
 
 def compute_stats(vehicle):
-    fills = rows(
-        "SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (vehicle["id"],)
-    )
+    fills = rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (vehicle["id"],))
     factor = KM_PER_MI if vehicle["odo_unit"] == "mi" else 1.0
     roll = vehicle["odo_rollover"] or 0
     offset = 0.0
-    prev_raw = None
-    prev_cum = None
+    prev_raw = prev_cum = None
     for f in fills:
-        f["cum_km"] = None
-        f["dist_km"] = None
+        f["cum_km"] = f["dist_km"] = None
         if f["odometer"] is None:
             continue
         raw = f["odometer"]
@@ -290,17 +292,19 @@ def compute_stats(vehicle):
             f["dist_km"] = f["cum_km"] - prev_cum
         prev_cum = f["cum_km"]
 
+    # full tank to full tank
     segments = []
     last_full_cum = None
-    acc_l = acc_kr = 0.0
+    acc_l = acc_cost = 0.0
     acc_complete = True
     for f in fills:
         if f["missed_previous"]:
             last_full_cum = None
-            acc_l = acc_kr = 0.0
+            acc_l = acc_cost = 0.0
+            acc_complete = True
         acc_l += f["liters"] or 0
         if f["price_total"] is not None:
-            acc_kr += f["price_total"]
+            acc_cost += f["price_total"]
         else:
             acc_complete = False
         if f["full_tank"] and f["cum_km"] is not None:
@@ -308,164 +312,175 @@ def compute_stats(vehicle):
                 dist = f["cum_km"] - last_full_cum
                 if dist > 0 and acc_l > 0:
                     segments.append({
-                        "fill_id": f["id"],
-                        "ts": f["ts"],
-                        "km": dist,
-                        "liters": acc_l,
-                        "kr": acc_kr if acc_complete else None,
+                        "fill_id": f["id"], "ts": f["ts"], "km": dist, "liters": acc_l,
+                        "cost": acc_cost if acc_complete else None,
                         "km_per_l": dist / acc_l,
                         "l_per_100km": acc_l / dist * 100,
-                        "kr_per_km": (acc_kr / dist) if acc_complete else None,
+                        "cost_per_km": (acc_cost / dist) if acc_complete else None,
                     })
             last_full_cum = f["cum_km"]
-            acc_l = acc_kr = 0.0
+            acc_l = acc_cost = 0.0
             acc_complete = True
 
     seg_km = sum(s["km"] for s in segments)
     seg_l = sum(s["liters"] for s in segments)
-    seg_kr_list = [s for s in segments if s["kr"] is not None]
-    seg_kr = sum(s["kr"] for s in seg_kr_list)
-    seg_kr_km = sum(s["km"] for s in seg_kr_list)
+    costed = [s for s in segments if s["cost"] is not None]
+    seg_cost = sum(s["cost"] for s in costed)
+    seg_cost_km = sum(s["km"] for s in costed)
 
     odo_fills = [f for f in fills if f["cum_km"] is not None]
     tracked_km = (odo_fills[-1]["cum_km"] - odo_fills[0]["cum_km"]) if len(odo_fills) > 1 else 0
     total_l = sum(f["liters"] or 0 for f in fills)
-    total_kr = sum(f["price_total"] or 0 for f in fills)
-    prices = [
-        {"ts": f["ts"], "kr_per_l": f["price_per_l"]}
-        for f in fills if f["price_per_l"]
-    ]
+    total_cost = sum(f["price_total"] or 0 for f in fills)
+    prices = [{"ts": f["ts"], "price_per_l": f["price_per_l"]} for f in fills if f["price_per_l"]]
 
-    # pr. måned og år
     def bucket(key_len):
         out = {}
         for f in fills:
-            k = f["ts"][:key_len]
-            b = out.setdefault(k, {"periode": k, "km": 0.0, "liters": 0.0, "kr": 0.0, "fills": 0})
+            b = out.setdefault(f["ts"][:key_len], {"period": f["ts"][:key_len], "km": 0.0, "liters": 0.0, "cost": 0.0, "fills": 0, "_sk": 0.0, "_sl": 0.0})
             b["liters"] += f["liters"] or 0
-            b["kr"] += f["price_total"] or 0
+            b["cost"] += f["price_total"] or 0
             b["fills"] += 1
-            if f["dist_km"]:
-                b["km"] += f["dist_km"]
+            b["km"] += f["dist_km"] or 0
         for s in segments:
-            k = s["ts"][:key_len]
-            b = out[k]
-            b.setdefault("_sk", 0.0)
-            b.setdefault("_sl", 0.0)
+            b = out[s["ts"][:key_len]]
             b["_sk"] += s["km"]
             b["_sl"] += s["liters"]
         res = []
         for k in sorted(out):
             b = out[k]
-            sk, sl = b.pop("_sk", 0), b.pop("_sl", 0)
+            sk, sl = b.pop("_sk"), b.pop("_sl")
             b["km_per_l"] = sk / sl if sl else None
             res.append(b)
         return res
 
-    months = bucket(7)
-    years = bucket(4)
-
     last = fills[-1] if fills else None
     now = dt.datetime.now()
     days_since = None
+    span_days = None
     if last:
         try:
-            days_since = (now - dt.datetime.fromisoformat(last["ts"])).days
+            days_since = max(0, (now - dt.datetime.fromisoformat(last["ts"])).days)
+            span_days = max(1, (dt.datetime.fromisoformat(last["ts"]) - dt.datetime.fromisoformat(fills[0]["ts"])).days)
         except ValueError:
             pass
     avg_kmpl = seg_km / seg_l if seg_l else None
-    this_year = now.strftime("%Y")
-    year_kr = sum(f["price_total"] or 0 for f in fills if f["ts"].startswith(this_year))
-    year_km = sum(f["dist_km"] or 0 for f in fills if f["ts"].startswith(this_year))
-
-    first_ts = fills[0]["ts"] if fills else None
-    span_days = None
-    if first_ts and last:
-        try:
-            span_days = max(1, (dt.datetime.fromisoformat(last["ts"]) - dt.datetime.fromisoformat(first_ts)).days)
-        except ValueError:
-            pass
+    year = now.strftime("%Y")
 
     return {
         "vehicle": vehicle,
+        "currency": CURRENCY,
         "count": len(fills),
         "tracked_km": tracked_km,
         "total_liters": total_l,
-        "total_kr": total_kr,
+        "total_cost": total_cost,
         "avg_km_per_l": avg_kmpl,
         "avg_l_per_100km": (seg_l / seg_km * 100) if seg_km else None,
         "avg_us_mpg": avg_kmpl * 2.352145 if avg_kmpl else None,
-        "avg_kr_per_km": (seg_kr / seg_kr_km) if seg_kr_km else None,
-        "avg_kr_per_l": (sum(p["kr_per_l"] for p in prices) / len(prices)) if prices else None,
-        "last_kr_per_l": prices[-1]["kr_per_l"] if prices else None,
+        "avg_cost_per_km": (seg_cost / seg_cost_km) if seg_cost_km else None,
+        "avg_price_per_l": (sum(p["price_per_l"] for p in prices) / len(prices)) if prices else None,
+        "last_price_per_l": prices[-1]["price_per_l"] if prices else None,
         "last_segment": segments[-1] if segments else None,
         "best_segment": max(segments, key=lambda s: s["km_per_l"]) if segments else None,
         "worst_segment": min(segments, key=lambda s: s["km_per_l"]) if segments else None,
         "last_fill": last,
         "last_odometer": odo_fills[-1]["odometer"] if odo_fills else None,
-        "last_cum_km": odo_fills[-1]["cum_km"] if odo_fills else None,
         "days_since_last": days_since,
         "avg_km_per_fill": (tracked_km / (len(odo_fills) - 1)) if len(odo_fills) > 1 else None,
         "km_per_month": (tracked_km / span_days * 30.44) if span_days and tracked_km else None,
         "range_km": (vehicle["tank_l"] * avg_kmpl) if (vehicle.get("tank_l") and avg_kmpl) else None,
-        "co2_kg": total_l * CO2_KG_PER_L,
-        "year": this_year,
-        "year_kr": year_kr,
-        "year_km": year_km,
+        "co2_kg": sum((f["liters"] or 0) * co2_factor(f["fuel_type"]) for f in fills),
+        "year": year,
+        "year_cost": sum(f["price_total"] or 0 for f in fills if f["ts"].startswith(year)),
+        "year_km": sum(f["dist_km"] or 0 for f in fills if f["ts"].startswith(year)),
         "segments": segments,
         "prices": prices,
-        "months": months,
-        "years": years,
+        "months": bucket(7),
+        "years": bucket(4),
     }
+
+
+# ---------------------------------------------------------------- HA sensors
+
+PUBLISHED_FILE = os.path.join(DATA_DIR, "published_sensors.json")
+
+
+def _load_published():
+    try:
+        with open(PUBLISHED_FILE, encoding="utf-8") as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+
+def _save_published(ids):
+    try:
+        with open(PUBLISHED_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(ids), f)
+    except OSError:
+        pass
 
 
 def publish_sensors():
     if not PUBLISH:
         return
     if not TOKEN:
-        log("Ingen SUPERVISOR_TOKEN – kan ikke oprette sensorer")
+        log("No SUPERVISOR_TOKEN - cannot publish sensors")
         return
-    n = 0
-    for v in rows("SELECT * FROM vehicles WHERE active=1"):
-        try:
-            st = compute_stats(v)
-        except Exception:
-            log("Stat-fejl", traceback.format_exc())
-            continue
-        slug = slugify(v["name"])
-        unit_odo = "mi" if v["odo_unit"] == "mi" else "km"
-        last_seg = st["last_segment"]
-        sensors = {
-            "km_pr_liter": (last_seg["km_per_l"] if last_seg else None, "km/L", "mdi:gas-station", "Seneste km/L", {}),
-            "km_pr_liter_gns": (st["avg_km_per_l"], "km/L", "mdi:gas-station-outline", "Gns. km/L", {}),
-            "kilometertaeller": (st["last_odometer"], unit_odo, "mdi:counter", "Km-tæller ved seneste tankning", {}),
-            "kr_pr_km": (st["avg_kr_per_km"], "kr/km", "mdi:cash", "Gns. kr/km", {}),
-            "literpris": (st["last_kr_per_l"], "kr/L", "mdi:currency-usd", "Seneste literpris", {}),
-            "udgift_i_aar": (st["year_kr"], "kr", "mdi:cash-multiple", f"Brændstof {st['year']}", {}),
-            "sidst_tanket": (st["last_fill"]["ts"] if st["last_fill"] else None, None, "mdi:calendar", "Sidst tanket", {}),
-        }
-        for key, (val, unit, icon, label, extra) in sensors.items():
-            if isinstance(val, float):
-                val = round(val, 2)
-            state = "unknown" if val is None else val
-            attrs = {"friendly_name": f"{v['name']} {label}", "icon": icon}
-            if unit:
-                attrs["unit_of_measurement"] = unit
-                attrs["state_class"] = "measurement"
-            if key == "sidst_tanket" and val:
-                attrs["device_class"] = "timestamp"
-                try:
-                    state = dt.datetime.fromisoformat(val).astimezone().isoformat()
-                except ValueError:
-                    pass
-            attrs.update(extra)
+    with PUBLISH_LOCK:
+        published = set()
+        failed = False
+        for v in rows("SELECT * FROM vehicles WHERE active=1"):
             try:
-                ha_request("POST", f"/states/sensor.braendstof_{slug}_{key}", {"state": state, "attributes": attrs}, timeout=10)
-                n += 1
+                st = compute_stats(v)
+            except Exception:
+                log("Statistics error", traceback.format_exc())
+                continue
+            slug = slugify(v["name"])
+            last_seg = st["last_segment"]
+            odo_unit = "mi" if v["odo_unit"] == "mi" else "km"
+            sensors = {
+                "km_per_l_last": (last_seg["km_per_l"] if last_seg else None, "km/L", "mdi:gas-station", "km/L last tank"),
+                "km_per_l_avg": (st["avg_km_per_l"], "km/L", "mdi:gas-station-outline", "km/L average"),
+                "odometer": (st["last_odometer"], odo_unit, "mdi:counter", "Odometer at last refuel"),
+                "cost_per_km": (st["avg_cost_per_km"], f"{CURRENCY}/km", "mdi:cash", "Fuel cost per km"),
+                "fuel_price": (st["last_price_per_l"], f"{CURRENCY}/L", "mdi:currency-usd", "Last fuel price"),
+                "cost_this_year": (st["year_cost"], CURRENCY, "mdi:cash-multiple", f"Fuel cost {st['year']}"),
+                "last_refuel": (st["last_fill"]["ts"] if st["last_fill"] else None, None, "mdi:calendar", "Last refuel"),
+            }
+            for key, (val, unit, icon, label) in sensors.items():
+                eid = f"sensor.fuel_tracker_{slug}_{key}"
+                if isinstance(val, float):
+                    val = round(val, 2)
+                state = "unknown" if val is None else val
+                attrs = {"friendly_name": f"{v['name']} {label}", "icon": icon}
+                if unit:
+                    attrs["unit_of_measurement"] = unit
+                    attrs["state_class"] = "measurement"
+                if key == "last_refuel" and val:
+                    attrs["device_class"] = "timestamp"
+                    try:
+                        state = dt.datetime.fromisoformat(val).astimezone().isoformat()
+                    except ValueError:
+                        pass
+                try:
+                    ha_request("POST", f"/states/{eid}", {"state": state, "attributes": attrs}, timeout=10)
+                    published.add(eid)
+                except Exception as e:
+                    log("Could not update sensor", eid, repr(e))
+                    failed = True
+        # remove sensors of deleted, renamed or hidden vehicles
+        stale = _load_published() - published
+        removed = 0
+        for eid in stale:
+            try:
+                ha_request("DELETE", f"/states/{eid}", timeout=10)
+                removed += 1
             except Exception as e:
-                log("Kunne ikke opdatere sensor", key, repr(e))
-                return
-    log(f"Opdaterede {n} sensorer")
+                log("Could not remove old sensor", eid, repr(e))
+        if not failed:
+            _save_published(published)
+        log(f"Updated {len(published)} sensors" + (f", removed {removed}" if removed else ""))
 
 
 def publish_async():
@@ -485,17 +500,15 @@ def clean_fill(body):
         f[k] = to_num(f[k])
     for k in ("full_tank", "missed_previous"):
         f[k] = 1 if f[k] in (True, 1, "1", "true", "on") else 0
-    f["vehicle_id"] = int(f["vehicle_id"])
+    f["vehicle_id"] = int(f["vehicle_id"] or 0)
     if not f["liters"] or f["liters"] <= 0:
-        raise ValueError("Antal liter mangler")
+        raise ValueError("Liters is missing")
     if f["price_total"] is None and f["price_per_l"]:
         f["price_total"] = round(f["price_per_l"] * f["liters"], 2)
     if f["price_per_l"] is None and f["price_total"]:
         f["price_per_l"] = round(f["price_total"] / f["liters"], 3)
-    ts = (f["ts"] or "").strip()
-    if not ts:
-        ts = dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
-    dt.datetime.fromisoformat(ts)  # validér
+    ts = (f["ts"] or "").strip() or dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
+    dt.datetime.fromisoformat(ts)
     f["ts"] = ts[:16]
     for k in ("ai_pump", "ai_odo"):
         if f[k] is not None and not isinstance(f[k], str):
@@ -507,16 +520,14 @@ def clean_fill(body):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "Braendstof/0.1"
+    server_version = "FuelTracker/" + VERSION
 
     def log_message(self, fmt, *args):
         if DEV:
             log(self.address_string(), fmt % args)
 
     def _allowed(self):
-        if DEV:
-            return True
-        return self.client_address[0] in ("172.30.32.2", "127.0.0.1")
+        return DEV or self.client_address[0] in ("172.30.32.2", "127.0.0.1")
 
     def send_json(self, obj, code=200):
         body = json.dumps(obj, ensure_ascii=False, default=str).encode()
@@ -539,7 +550,7 @@ class Handler(BaseHTTPRequestHandler):
     def read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
         if n > 25 * 1024 * 1024:
-            raise ValueError("For stor forespørgsel")
+            raise ValueError("Request too large")
         return json.loads(self.rfile.read(n) or b"{}")
 
     def route(self, method):
@@ -554,18 +565,20 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(STATIC_DIR, "index.html"), "rb") as f:
                     return self.send_bytes(f.read(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
             if p == "/api/status":
-                return self.send_json({"ai_entity": AI_ENTITY, "has_token": bool(TOKEN), "version": VERSION})
+                return self.send_json({"ai_entity": AI_ENTITY, "has_token": bool(TOKEN), "version": VERSION, "currency": CURRENCY})
+
             if p == "/api/vehicles":
                 if method == "GET":
-                    return self.send_json(rows("SELECT * FROM vehicles ORDER BY active DESC, sort, id"))
+                    vs = rows("SELECT v.*, (SELECT COUNT(*) FROM fills f WHERE f.vehicle_id=v.id) AS fill_count "
+                              "FROM vehicles v ORDER BY v.active DESC, v.id")
+                    return self.send_json(vs)
                 if method == "POST":
                     b = self.read_json()
                     name = (b.get("name") or "").strip()
                     if not name:
-                        raise ValueError("Navn mangler")
+                        raise ValueError("Name is missing")
                     unit = "mi" if b.get("odo_unit") == "mi" else "km"
-                    roll = to_num(b.get("odo_rollover"))
-                    roll = 0 if roll is None else roll
+                    roll = to_num(b.get("odo_rollover")) or 0
                     tank = to_num(b.get("tank_l"))
                     active = 0 if b.get("active") in (False, 0, "0") else 1
                     if b.get("id"):
@@ -573,40 +586,54 @@ class Handler(BaseHTTPRequestHandler):
                                 (name, unit, roll, tank, active, int(b["id"])))
                         vid = int(b["id"])
                     else:
-                        vid = execute("INSERT INTO vehicles(name, odo_unit, odo_rollover, tank_l, active, sort) VALUES (?,?,?,?,?,99)",
+                        vid = execute("INSERT INTO vehicles(name, odo_unit, odo_rollover, tank_l, active) VALUES (?,?,?,?,?)",
                                       (name, unit, roll, tank, active))
                     publish_async()
                     return self.send_json(get_vehicle(vid))
+            m = re.fullmatch(r"/api/vehicles/(\d+)", p)
+            if m and method == "DELETE":
+                vid = int(m.group(1))
+                for r in rows("SELECT img_pump, img_odo FROM fills WHERE vehicle_id=?", (vid,)):
+                    delete_image(r["img_pump"])
+                    delete_image(r["img_odo"])
+                execute("DELETE FROM fills WHERE vehicle_id=?", (vid,))
+                execute("DELETE FROM vehicles WHERE id=?", (vid,))
+                publish_async()
+                return self.send_json({"ok": True})
+
             if p == "/api/fills":
                 if method == "GET":
-                    vid = int(q.get("vehicle", 0))
-                    return self.send_json(rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts DESC, id DESC", (vid,)))
+                    return self.send_json(rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts DESC, id DESC",
+                                               (int(q.get("vehicle", 0)),)))
                 if method == "POST":
                     b = self.read_json()
                     f = clean_fill(b)
                     if not get_vehicle(f["vehicle_id"]):
-                        raise ValueError("Ukendt bil")
+                        raise ValueError("Unknown vehicle")
                     if b.get("id"):
-                        sets = ", ".join(f"{k}=?" for k in f)
-                        execute(f"UPDATE fills SET {sets} WHERE id=?", (*f.values(), int(b["id"])))
+                        execute(f"UPDATE fills SET {', '.join(f'{k}=?' for k in f)} WHERE id=?", (*f.values(), int(b["id"])))
                         fid = int(b["id"])
                     else:
                         f["created"] = dt.datetime.now().isoformat(timespec="seconds")
-                        cols = ", ".join(f)
-                        marks = ", ".join("?" for _ in f)
-                        fid = execute(f"INSERT INTO fills({cols}) VALUES ({marks})", tuple(f.values()))
+                        fid = execute(f"INSERT INTO fills({', '.join(f)}) VALUES ({', '.join('?' for _ in f)})", tuple(f.values()))
                     publish_async()
                     return self.send_json(rows("SELECT * FROM fills WHERE id=?", (fid,))[0])
             m = re.fullmatch(r"/api/fills/(\d+)", p)
             if m and method == "DELETE":
+                r = rows("SELECT img_pump, img_odo FROM fills WHERE id=?", (int(m.group(1)),))
+                if r:
+                    delete_image(r[0]["img_pump"])
+                    delete_image(r[0]["img_odo"])
                 execute("DELETE FROM fills WHERE id=?", (int(m.group(1)),))
                 publish_async()
                 return self.send_json({"ok": True})
+
             if p == "/api/stats":
                 v = get_vehicle(int(q.get("vehicle", 0)))
                 if not v:
-                    return self.send_json({"error": "Ukendt bil"}, 404)
+                    return self.send_json({"error": "Unknown vehicle"}, 404)
                 return self.send_json(compute_stats(v))
+
             if p == "/api/extract" and method == "POST":
                 b = self.read_json()
                 kind = "pump" if b.get("kind") == "pump" else "odo"
@@ -615,14 +642,15 @@ class Handler(BaseHTTPRequestHandler):
                     img = img.split(",", 1)[1]
                 raw = base64.b64decode(img)
                 if raw[:2] != b"\xff\xd8":
-                    raise ValueError("Billedet skal være JPEG")
+                    raise ValueError("The image must be a JPEG")
                 name = dt.datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{kind}-{os.urandom(3).hex()}.jpg"
                 with open(os.path.join(MEDIA_DIR, name), "wb") as f:
                     f.write(raw)
                 t0 = time.time()
                 data, err = ai_read(kind, name)
-                log(f"Aflæst {kind} på {time.time() - t0:.1f}s:", json.dumps(data, ensure_ascii=False), err or "")
+                log(f"Read {kind} in {time.time() - t0:.1f}s:", json.dumps(data, ensure_ascii=False), err or "")
                 return self.send_json({"image": name, "data": data, "error": err})
+
             m = re.fullmatch(r"/api/img/([A-Za-z0-9_\-]+\.jpg)", p)
             if m:
                 path = os.path.join(MEDIA_DIR, m.group(1))
@@ -630,26 +658,26 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_error(404)
                 with open(path, "rb") as f:
                     return self.send_bytes(f.read(), "image/jpeg", {"Cache-Control": "max-age=86400"})
+
             if p == "/api/export.csv":
                 v = get_vehicle(int(q.get("vehicle", 0)))
                 if not v:
                     return self.send_error(404)
                 out = io.StringIO()
-                w = csv.writer(out, delimiter=";")
+                w = csv.writer(out)
                 cols = ["ts", "odometer", "liters", "price_total", "price_per_l", "full_tank",
                         "missed_previous", "fuel_type", "station", "note"]
-                w.writerow(["bil"] + cols)
+                w.writerow(["vehicle", "odometer_unit", "currency"] + cols)
                 for r in rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (v["id"],)):
-                    w.writerow([v["name"]] + [("" if r[c] is None else str(r[c]).replace(".", ",") if isinstance(r[c], float) else r[c]) for c in cols])
-                data = ("﻿" + out.getvalue()).encode("utf-8")
-                fn = slugify(v["name"]) + "-braendstof.csv"
-                return self.send_bytes(data, "text/csv; charset=utf-8",
+                    w.writerow([v["name"], v["odo_unit"], CURRENCY] + ["" if r[c] is None else r[c] for c in cols])
+                fn = slugify(v["name"]) + "-fuel.csv"
+                return self.send_bytes(("﻿" + out.getvalue()).encode("utf-8"), "text/csv; charset=utf-8",
                                        {"Content-Disposition": f'attachment; filename="{fn}"'})
-            self.send_json({"error": "Ikke fundet"}, 404)
+            self.send_json({"error": "Not found"}, 404)
         except ValueError as e:
             self.send_json({"error": str(e)}, 400)
         except Exception as e:
-            log("Fejl", traceback.format_exc())
+            log("Error", traceback.format_exc())
             self.send_json({"error": repr(e)}, 500)
 
     def do_GET(self):
@@ -664,7 +692,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    log(f"Brændstof {VERSION} starter på port {PORT} – AI-entitet: {AI_ENTITY}, token: {'ja' if TOKEN else 'MANGLER'}")
+    log(f"Fuel Tracker {VERSION} starting on port {PORT} - AI entity: {AI_ENTITY}, "
+        f"token: {'yes' if TOKEN else 'MISSING'}, currency: {CURRENCY}")
     publish_async()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

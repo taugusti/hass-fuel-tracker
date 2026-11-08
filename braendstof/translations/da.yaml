@@ -1,7 +1,0 @@
-configuration:
-  ai_task_entity:
-    name: AI Task-entitet
-    description: Den AI Task-entitet der aflæser billederne (fx ai_task.claude_ai_task).
-  publish_sensors:
-    name: Opret sensorer i HA
-    description: Lægger km/L, km-tæller, kr/km m.m. ud som sensor.braendstof_* til brug i dashboards og automationer.

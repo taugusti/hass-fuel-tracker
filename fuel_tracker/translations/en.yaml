@@ -1,0 +1,10 @@
+configuration:
+  ai_task_entity:
+    name: AI Task entity
+    description: The AI Task entity that reads the photos (e.g. ai_task.claude_ai_task). It must support attachments.
+  publish_sensors:
+    name: Publish sensors
+    description: Exposes km/L, odometer, cost per km etc. as sensor.fuel_tracker_* for dashboards and automations.
+  currency:
+    name: Currency
+    description: Currency label shown in the app and on sensors (e.g. kr, €, $).

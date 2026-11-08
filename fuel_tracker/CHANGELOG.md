@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 – 2026-11-08
+- All settings in the app (new Settings tab): currency, distance and volume units, consumption format, warning threshold, fuel types with CO₂ factors, AI Task entity, sensors on/off. No app options in Home Assistant any more.
+- Sensors renamed to consumption_last / consumption_avg / cost_per_distance and published in the chosen units.
+- Navigation moved to the top; "+ Register refuel" on Statistics and "← Statistics" on Refuel; starts on Statistics when there is data; adding the first vehicle opens Refuel.
+- The pump reading also reports whether the display shows liters or gallons.
+
 ## 0.2.0 – 2026-11-08
 - Renamed to Fuel Tracker throughout (slug `fuel_tracker`, sensors `sensor.fuel_tracker_*`, `/media/fuel_tracker`).
 - Everything in English; numbers and dates follow the browser's locale.

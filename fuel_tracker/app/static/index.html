@@ -17,17 +17,18 @@
 }}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:760px;margin:0 auto;padding:12px 16px 90px}
+.wrap{max-width:760px;margin:0 auto;padding:12px 16px 32px}
 header{display:flex;align-items:center;gap:10px;margin:4px 0 12px}
 header h1{font-size:20px;margin:0;letter-spacing:.2px}
 .sub{color:var(--muted);font-size:13px}
 .cars{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px}
 .chip{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:8px 14px;font-size:15px;white-space:nowrap;cursor:pointer}
 .chip.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
-nav.tabs{position:fixed;left:0;right:0;bottom:0;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);z-index:5}
-nav.tabs button{flex:1;border:0;background:none;color:var(--muted);padding:10px 4px 12px;font-size:13px;cursor:pointer}
+nav.tabs{position:sticky;top:0;display:flex;background:var(--card);border:1px solid var(--line);border-radius:14px;margin:0 0 12px;z-index:5;overflow:hidden}
+nav.tabs button{flex:1;border:0;background:none;color:var(--muted);padding:8px 2px 9px;font-size:12px;cursor:pointer;min-width:0}
 nav.tabs button b{display:block;font-size:20px;line-height:1.1}
-nav.tabs button.on{color:var(--accent);font-weight:600}
+nav.tabs button.on{color:var(--accent);font-weight:600;background:var(--accent-soft)}
+.ftrow{display:grid;grid-template-columns:1fr 110px 40px;gap:8px;margin-bottom:8px;align-items:center}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
 .card h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
 .shots{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
@@ -81,7 +82,7 @@ th{color:var(--muted);font-weight:600;font-size:12px}
 .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:6px;background:var(--warn-bg);color:var(--warn);margin-left:4px}
 svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 .empty{color:var(--muted);text-align:center;padding:30px 10px}
-.toast{position:fixed;left:50%;bottom:86px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
 .toast.on{opacity:1}
 .lb{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:10}
 .lb img{max-width:96vw;max-height:92vh}
@@ -96,6 +97,13 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 <body>
 <div class="wrap">
   <header><div><h1>⛽ Fuel Tracker</h1><div class="sub">Fuel log for your vehicles</div></div></header>
+  <nav class="tabs">
+    <button data-tab="tank" class="on"><b>⛽</b>Refuel</button>
+    <button data-tab="stats"><b>📈</b>Statistics</button>
+    <button data-tab="log"><b>📋</b>Log</button>
+    <button data-tab="cars"><b>🚙</b>Vehicles</button>
+    <button data-tab="settings"><b>⚙️</b>Settings</button>
+  </nav>
   <div class="cars" id="cars"></div>
 
   <div class="card hide" id="no-cars">
@@ -104,6 +112,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 
   <!-- REFUEL -->
   <section id="tab-tank">
+    <div style="margin-bottom:12px"><button class="btn small" data-go="stats">← Statistics</button></div>
     <div class="shots">
       <div class="shot" id="shot-pump">
         <div class="ttl">Pump display</div>
@@ -132,9 +141,9 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
       <div id="ai-box"></div>
       <div class="f"><label>Date and time<span class="ai" id="ai-ts"></span></label><input type="datetime-local" id="ts"></div>
       <div class="grid3">
-        <div class="f"><label>Liters<span class="ai" id="ai-liters"></span></label><input type="number" inputmode="decimal" step="0.01" id="liters"></div>
+        <div class="f"><label>Volume (<span class="vu"></span>)<span class="ai" id="ai-liters"></span></label><input type="number" inputmode="decimal" step="0.01" id="liters"></div>
         <div class="f"><label>Total <span class="cur"></span><span class="ai" id="ai-total"></span></label><input type="number" inputmode="decimal" step="0.01" id="total"></div>
-        <div class="f"><label><span class="cur"></span>/L<span class="ai" id="ai-ppl"></span></label><input type="number" inputmode="decimal" step="0.001" id="ppl"></div>
+        <div class="f"><label><span class="cur"></span>/<span class="vu"></span><span class="ai" id="ai-ppl"></span></label><input type="number" inputmode="decimal" step="0.001" id="ppl"></div>
       </div>
       <div class="f"><label>Odometer (<span id="odo-unit">km</span>)<span class="ai" id="ai-odo"></span></label><input type="number" inputmode="decimal" step="0.1" id="odo"></div>
       <div id="warns"></div>
@@ -144,7 +153,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
         <div class="f"><label>Fuel</label><input type="text" id="fuel" list="fuels"></div>
         <div class="f"><label>Station</label><input type="text" id="station" list="stations"></div>
       </div>
-      <datalist id="fuels"><option>Petrol 95 E10</option><option>Petrol 95 E5</option><option>Petrol 98</option><option>Diesel</option></datalist>
+      <datalist id="fuels"></datalist>
       <datalist id="stations"></datalist>
       <div class="f"><label>Note</label><input type="text" id="note"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
@@ -156,8 +165,9 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 
   <!-- STATISTICS -->
   <section id="tab-stats" class="hide">
+    <button class="btn pri" style="width:100%;margin-bottom:12px;padding:12px" data-go="tank">+ Register refuel</button>
     <div class="kpis" id="kpis"></div>
-    <div class="card"><h2>km/L per full tank</h2><div id="ch-kmpl"></div></div>
+    <div class="card"><h2>Consumption per full tank</h2><div id="ch-kmpl"></div></div>
     <div class="card"><h2>Fuel price</h2><div id="ch-price"></div></div>
     <div class="card"><h2>Cost and distance per month</h2><div id="ch-month"></div></div>
     <div class="card"><h2>Per year</h2><div id="tbl-year"></div></div>
@@ -175,16 +185,36 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
   <section id="tab-cars" class="hide">
     <div id="car-forms"></div>
     <div class="card"><button class="btn pri" id="add-car">+ Add vehicle</button></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="hide">
+    <div class="card"><h2>Units</h2>
+      <div class="grid2">
+        <div class="f"><label>Currency</label><input type="text" id="set-currency" placeholder="e.g. kr, €, $"></div>
+        <div class="f"><label>Distance</label><select id="set-distance"><option value="km">Kilometers (km)</option><option value="mi">Miles (mi)</option></select></div>
+      </div>
+      <div class="grid2">
+        <div class="f"><label>Volume</label><select id="set-volume"><option value="L">Liters (L)</option><option value="gal_us">US gallons</option><option value="gal_uk">UK (imperial) gallons</option></select></div>
+        <div class="f"><label>Consumption shown as</label><select id="set-cons"><option value="dpv"></option><option value="vp100"></option></select></div>
+      </div>
+      <div class="f"><label>Warn when the distance since the last refuel exceeds (<span id="set-warn-unit"></span>)</label><input type="number" id="set-warn" placeholder="no warning"></div>
+    </div>
+    <div class="card"><h2>Fuel types</h2>
+      <div class="hint" style="margin-bottom:8px">Shown as suggestions in the form. The CO₂ factor (kg per liter burned) is used for the CO₂ statistic; refuels with another fuel name are left out of it.</div>
+      <div class="ftrow sub"><span>Name</span><span>kg CO₂/L</span><span></span></div>
+      <div id="set-fuels"></div>
+      <button class="btn small" id="add-fuel">+ Add fuel type</button>
+    </div>
+    <div class="card"><h2>Home Assistant</h2>
+      <div class="f"><label>AI Task entity that reads the photos</label><select id="set-ai"></select><div class="hint">It must support attachments (images).</div></div>
+      <label class="check"><input type="checkbox" id="set-publish"><span>Publish sensors<small>sensor.fuel_tracker_&lt;vehicle&gt;_* for dashboards and automations</small></span></label>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn pri" id="save-settings">Save settings</button></div>
     <div class="sub" id="ver" style="text-align:center"></div>
   </section>
 </div>
 
-<nav class="tabs">
-  <button data-tab="tank" class="on"><b>⛽</b>Refuel</button>
-  <button data-tab="stats"><b>📈</b>Statistics</button>
-  <button data-tab="log"><b>📋</b>Log</button>
-  <button data-tab="cars"><b>🚙</b>Vehicles</button>
-</nav>
 <div class="toast" id="toast"></div>
 <div class="lb" id="lb"><img alt=""></div>
 
@@ -192,13 +222,29 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const LOC = navigator.language || 'en';
-const S = {vehicles:[], vid:null, tab:'tank', cur:'kr', shots:{pump:null, odo:null}, ai:{pump:null, odo:null}, aiMsg:{pump:null, odo:null}, tsFrom:null, editId:null, fills:[], busy:0};
+const S = {cfg:null, vehicles:[], vid:null, tab:'tank', cur:'kr', shots:{pump:null, odo:null}, ai:{pump:null, odo:null}, aiMsg:{pump:null, odo:null}, tsFrom:null, editId:null, fills:[], busy:0};
 const nf = (v, d=1) => v==null||isNaN(v) ? '–' : Number(v).toLocaleString(LOC,{minimumFractionDigits:d, maximumFractionDigits:d});
 const ni = v => v==null ? '–' : Math.round(v).toLocaleString(LOC);
 const fdate = ts => ts ? new Date(ts).toLocaleDateString(LOC,{day:'numeric',month:'short',year:'numeric'}) : '–';
 const fdt = ts => new Date(ts).toLocaleString(LOC,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
 const veh = () => S.vehicles.find(v => v.id === S.vid);
 const unitLabel = v => (v && v.odo_unit === 'mi') ? 'miles' : 'km';
+// ---------- units (data is stored in km and liters; this converts for display)
+const KMU = {km:1, mi:1.609344}, LU = {L:1, gal_us:3.785411784, gal_uk:4.54609};
+const du = () => S.cfg.distance_unit, vu = () => S.cfg.volume_unit;
+const dLab = () => du(), vLab = () => vu()==='L' ? 'L' : 'gal';
+const vol = l => l==null ? null : l / LU[vu()];               // liters -> display volume
+const volIn = x => x==null||x==='' ? null : +x * LU[vu()];    // display volume -> liters
+const dist = km => km==null ? null : km / KMU[du()];          // km -> display distance
+const perVol = ppl => ppl==null ? null : ppl * LU[vu()];      // price per liter -> per display volume
+const perVolIn = x => x==null||x==='' ? null : +x / LU[vu()];
+const perDist = cpk => cpk==null ? null : cpk * KMU[du()];
+const consLabel = style => { style = style || S.cfg.consumption_style; const l = style==='dpv' ? `${dLab()}/${vLab()}` : `${vLab()}/100 ${dLab()}`; return l==='mi/gal' ? 'mpg' : l; };
+const cons = kmpl => { if (!kmpl) return null; const dpv = kmpl * LU[vu()] / KMU[du()]; return S.cfg.consumption_style==='dpv' ? dpv : 100/dpv; };
+function applyUnitLabels(){
+  $$('.cur').forEach(e => e.textContent = S.cur); $$('.vu').forEach(e => e.textContent = vLab());
+  $('#fuels').innerHTML = (S.cfg.fuel_types||[]).map(f => `<option>${esc(f.name)}</option>`).join('');
+}
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function api(path, opt={}) {
@@ -223,11 +269,13 @@ function renderCars(){
   $('#cars').innerHTML = act.map(v => `<button class="chip ${v.id===S.vid?'on':''}" data-v="${v.id}">${esc(v.name)}</button>`).join('');
   $$('#cars .chip').forEach(b => b.onclick = () => { S.vid = +b.dataset.v; try{localStorage.setItem('ft_vid', S.vid)}catch(e){}; renderCars(); refresh(); });
   $('#odo-unit').textContent = unitLabel(veh());
+  $('#cars').classList.toggle('hide', S.tab==='settings');
   const none = !act.length;
-  $('#no-cars').classList.toggle('hide', !none || S.tab==='cars');
+  $('#no-cars').classList.toggle('hide', !none || S.tab==='cars' || S.tab==='settings');
   ['tank','stats','log'].forEach(x => { if (none) $('#tab-'+x).classList.add('hide'); });
-  if (!none && S.tab!=='cars') $('#tab-'+S.tab).classList.remove('hide');
+  if (!none && S.tab!=='cars' && S.tab!=='settings') $('#tab-'+S.tab).classList.remove('hide');
 }
+$$('[data-go]').forEach(b => b.onclick = () => { if (b.dataset.go==='stats' && S.editId) resetForm(); showTab(b.dataset.go); scrollTo(0,0); });
 $('#go-add').onclick = () => { showTab('cars'); addCarForm(); };
 
 // ---------- tabs
@@ -235,11 +283,12 @@ $$('nav.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
 function showTab(t){
   S.tab = t;
   $$('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab===t));
-  ['tank','stats','log','cars'].forEach(x => $('#tab-'+x).classList.toggle('hide', x!==t));
+  ['tank','stats','log','cars','settings'].forEach(x => $('#tab-'+x).classList.toggle('hide', x!==t));
   renderCars(); refresh();
 }
 async function refresh(){
   if (S.tab==='cars') return renderCarForms();
+  if (S.tab==='settings') return renderSettings();
   if (!S.vid) return;
   if (S.tab==='stats') renderStats(await api('api/stats?vehicle='+S.vid));
   if (S.tab==='log' || S.tab==='tank') S.fills = await api('api/fills?vehicle='+S.vid);
@@ -334,7 +383,7 @@ function applyAI(kind, d){
     autoCalc();
     const ok = a||b||c;
     st.textContent = ok ? '✓ Copied to the form' : 'No numbers found – enter them yourself';
-    S.aiMsg.pump = {title:'Pump display', note:d.note, reading: ok ? [d.liters!=null?nf(d.liters,2)+' L':null, d.total_price!=null?nf(d.total_price,2)+' '+S.cur:null, d.price_per_liter!=null?nf(d.price_per_liter,2)+' '+S.cur+'/L':null].filter(Boolean).join(' · ') : 'Could not be read – enter the numbers yourself'};
+    S.aiMsg.pump = {title:'Pump display', note:d.note, reading: ok ? [d.liters!=null?nf(d.liters,2)+' '+(d.volume_unit && d.volume_unit!=='unknown' ? d.volume_unit : vLab()):null, d.total_price!=null?nf(d.total_price,2)+' '+S.cur:null, d.price_per_liter!=null?nf(d.price_per_liter,2)+' '+S.cur+'/'+(d.volume_unit && d.volume_unit!=='unknown' ? d.volume_unit : vLab()):null].filter(Boolean).join(' · ') : 'Could not be read – enter the numbers yourself'};
   } else {
     const ok = setAI('#odo','#ai-odo', d.reading, 1);
     st.textContent = ok ? '✓ Copied to the form' : 'Could not read the odometer – enter it yourself';
@@ -369,17 +418,20 @@ function lastFillBefore(){
 function checkWarnings(){
   const w = [];
   const L = parseFloat($('#liters').value), T = parseFloat($('#total').value), P = parseFloat($('#ppl').value), O = parseFloat($('#odo').value);
-  if (L>0 && T>0 && P>0 && Math.abs(L*P - T) > Math.max(1, T*0.02)) w.push(`The numbers don't add up: ${nf(L,2)} L × ${nf(P,2)} = ${nf(L*P,2)} ${S.cur}, but the total is ${nf(T,2)} ${S.cur}.`);
+  if (L>0 && T>0 && P>0 && Math.abs(L*P - T) > Math.max(1, T*0.02)) w.push(`The numbers don't add up: ${nf(L,2)} ${vLab()} × ${nf(P,2)} = ${nf(L*P,2)} ${S.cur}, but the total is ${nf(T,2)} ${S.cur}.`);
+  const pa = S.ai.pump;
+  if (pa && pa.volume_unit && pa.volume_unit!=='unknown' && pa.volume_unit !== vLab()) w.push(`The pump seems to show ${pa.volume_unit}, but the app is set to ${vLab()}. Check the numbers or change the volume unit under Settings.`);
   const v = veh(), last = lastFillBefore();
   if (last && O>0){
     const diff = O - last.odometer;
     if (diff < 0) w.push(`The odometer (${nf(O,1)}) is lower than last time (${nf(last.odometer,1)}). ${v && v.odo_rollover ? `It will be treated as having rolled over at ${ni(v.odo_rollover)}.` : 'Check the reading, or set a rollover value under Vehicles.'}`);
-    else if (diff > 2000) w.push(`That is ${ni(diff)} ${unitLabel(v)} since the last refuel – is that right?`);
+    else { const dKm = diff * (v && v.odo_unit==='mi' ? KMU.mi : 1);
+      if (S.cfg.warn_distance && dist(dKm) > S.cfg.warn_distance) w.push(`That is ${ni(dist(dKm))} ${dLab()} since the last refuel – is that right?`); }
   }
   const ai = S.ai.odo;
   if (ai && ai.unit && v && ((ai.unit==='miles' && v.odo_unit!=='mi') || (ai.unit==='km' && v.odo_unit==='mi')))
     w.push(`The odometer seems to show ${ai.unit}, but the vehicle is set up for ${unitLabel(v)}. Check under Vehicles.`);
-  if (v && v.tank_l && L > v.tank_l * 1.05) w.push(`${nf(L,2)} L is more than the tank size (${nf(v.tank_l,0)} L).`);
+  if (v && v.tank_l && L > vol(v.tank_l) * 1.05) w.push(`${nf(L,2)} ${vLab()} is more than the tank size (${nf(vol(v.tank_l),1)} ${vLab()}).`);
   $('#warns').innerHTML = w.map(x => `<div class="warn">⚠️ ${esc(x)}</div>`).join('');
 }
 function updateSave(){ $('#save').disabled = S.busy>0; $('#save').textContent = S.busy>0 ? 'Waiting for reading…' : (S.editId?'Save changes':'Save refuel'); }
@@ -403,7 +455,7 @@ $('#cancel-edit').onclick = resetForm;
 $('#save').onclick = async () => {
   const body = {
     id: S.editId, vehicle_id: S.vid, ts: $('#ts').value,
-    liters: $('#liters').value, price_total: $('#total').value, price_per_l: $('#ppl').value,
+    liters: volIn($('#liters').value), price_total: $('#total').value, price_per_l: perVolIn($('#ppl').value),
     odometer: $('#odo').value, full_tank: $('#full').checked, missed_previous: $('#missed').checked,
     fuel_type: $('#fuel').value.trim(), station: $('#station').value.trim(), note: $('#note').value.trim(),
     img_pump: S.shots.pump, img_odo: S.shots.odo, ai_pump: S.ai.pump, ai_odo: S.ai.odo,
@@ -419,7 +471,8 @@ function editFill(f){
   showTab('tank'); clearAIState();
   S.editId = f.id; S.shots = {pump:f.img_pump, odo:f.img_odo};
   try { S.ai = {pump: f.ai_pump?JSON.parse(f.ai_pump):null, odo: f.ai_odo?JSON.parse(f.ai_odo):null}; } catch(e){ S.ai={pump:null,odo:null}; }
-  $('#ts').value = f.ts; $('#liters').value = f.liters ?? ''; $('#total').value = f.price_total ?? ''; $('#ppl').value = f.price_per_l ?? '';
+  const r2 = (x, d) => x==null ? '' : String(parseFloat(x.toFixed(d)));
+  $('#ts').value = f.ts; $('#liters').value = r2(vol(f.liters),2); $('#total').value = f.price_total ?? ''; $('#ppl').value = r2(perVol(f.price_per_l),3);
   $('#odo').value = f.odometer ?? ''; $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;
   $('#fuel').value = f.fuel_type||''; $('#station').value = f.station||''; $('#note').value = f.note||'';
   ['pump','odo'].forEach(k => { const b=$('#shot-'+k), im=b.querySelector('img'), fn=k==='pump'?f.img_pump:f.img_odo;
@@ -437,8 +490,8 @@ function renderLog(){
     <div class="item">
       <div class="thumbs">${[f.img_pump,f.img_odo].filter(Boolean).map(i=>`<img src="api/img/${i}" data-full="api/img/${i}" alt="">`).join('')}</div>
       <div class="main">
-        <div class="t">${nf(f.liters,2)} L · ${nf(f.price_total,2)} ${esc(S.cur)} ${f.full_tank?'':'<span class="tag">partial</span>'}${f.missed_previous?'<span class="tag">gap before</span>':''}</div>
-        <div class="d">${fdate(f.ts)} · ${f.odometer!=null?nf(f.odometer,1)+' '+unitLabel(v):'no odometer'}${f.station?' · '+esc(f.station):''}${f.price_per_l?' · '+nf(f.price_per_l,2)+' '+esc(S.cur)+'/L':''}</div>
+        <div class="t">${nf(vol(f.liters),2)} ${vLab()} · ${nf(f.price_total,2)} ${esc(S.cur)} ${f.full_tank?'':'<span class="tag">partial</span>'}${f.missed_previous?'<span class="tag">gap before</span>':''}</div>
+        <div class="d">${fdate(f.ts)} · ${f.odometer!=null?nf(f.odometer,1)+' '+unitLabel(v):'no odometer'}${f.station?' · '+esc(f.station):''}${f.price_per_l?' · '+nf(perVol(f.price_per_l),2)+' '+esc(S.cur)+'/'+vLab():''}</div>
         ${f.note?`<div class="d">${esc(f.note)}</div>`:''}
       </div>
       <button class="btn small" data-edit="${f.id}">Edit</button>
@@ -452,40 +505,40 @@ $('#lb').onclick = () => $('#lb').style.display='none';
 
 // ---------- statistics
 function renderStats(s){
-  const v = s.vehicle, mi = v.odo_unit==='mi', c = esc(S.cur);
-  const k = (val, unit, label) => `<div class="kpi"><div class="v">${val}${unit?` <small>${unit}</small>`:''}</div><div class="l">${label}</div></div>`;
+  const v = s.vehicle, c = esc(S.cur), cl = consLabel(), other = S.cfg.consumption_style==='dpv' ? 'vp100' : 'dpv';
+  const consOther = kmpl => { if (!kmpl) return null; const dpv = kmpl * LU[vu()] / KMU[du()]; return other==='dpv' ? dpv : 100/dpv; };
+  const k = (val, unit, label) => `<div class="kpi"><div class="v">${val}${unit?` <small>${esc(unit)}</small>`:''}</div><div class="l">${label}</div></div>`;
   const ls = s.last_segment;
   $('#kpis').innerHTML = [
-    k(nf(s.avg_km_per_l,1), 'km/L', 'Average'),
-    k(ls?nf(ls.km_per_l,1):'–', 'km/L', 'Last full tank'),
-    k(nf(s.avg_l_per_100km,1), 'L/100 km', 'Average'),
-    k(nf(s.avg_cost_per_km,2), c+'/km', 'Fuel cost per km'),
-    k(ni(s.tracked_km), 'km', 'Distance logged'),
-    k(ni(s.total_cost), c, `Total spent (${s.count} refuels)`),
-    k(ni(s.year_cost), c, `Spent in ${s.year}`),
+    k(nf(cons(s.avg_km_per_l),1), cl, 'Average'),
+    k(ls?nf(cons(ls.km_per_l),1):'–', cl, 'Last full tank'),
+    k(nf(consOther(s.avg_km_per_l),1), consLabel(other), 'Average'),
+    k(nf(perDist(s.avg_cost_per_km),2), `${S.cur}/${dLab()}`, `Fuel cost per ${dLab()}`),
+    k(ni(dist(s.tracked_km)), dLab(), 'Distance logged'),
+    k(ni(s.total_cost), S.cur, `Total spent (${s.count} refuel${s.count===1?'':'s'})`),
+    k(ni(s.year_cost), S.cur, `Spent in ${s.year}`),
     k(s.days_since_last==null?'–':s.days_since_last, 'days', 'Since last refuel'),
   ].join('');
   const seg = s.segments;
   $('#ch-kmpl').innerHTML = !seg.length ? '<div class="empty">Needs at least two full refuels with odometer readings.</div>'
-    : lineChart(seg.map(x=>({x:x.ts, y:x.km_per_l, tip:`${fdate(x.ts)}: ${nf(x.km_per_l,1)} km/L (${ni(x.km)} km, ${nf(x.liters,1)} L)`})), {color:'var(--c1)', avg:s.avg_km_per_l, unit:'km/L'});
+    : lineChart(seg.map(x=>({x:x.ts, y:cons(x.km_per_l), tip:`${fdate(x.ts)}: ${nf(cons(x.km_per_l),1)} ${cl} (${ni(dist(x.km))} ${dLab()}, ${nf(vol(x.liters),1)} ${vLab()})`})), {color:'var(--c1)', avg:cons(s.avg_km_per_l), unit:cl});
   $('#ch-price').innerHTML = !s.prices.length ? '<div class="empty">No fuel prices yet.</div>'
-    : lineChart(s.prices.map(x=>({x:x.ts, y:x.price_per_l, tip:`${fdate(x.ts)}: ${nf(x.price_per_l,2)} ${S.cur}/L`})), {color:'var(--c2)', avg:s.avg_price_per_l, unit:S.cur+'/L', digits:2});
+    : lineChart(s.prices.map(x=>({x:x.ts, y:perVol(x.price_per_l), tip:`${fdate(x.ts)}: ${nf(perVol(x.price_per_l),2)} ${S.cur}/${vLab()}`})), {color:'var(--c2)', avg:perVol(s.avg_price_per_l), unit:`${S.cur}/${vLab()}`, digits:2});
   $('#ch-month').innerHTML = !s.months.length ? '<div class="empty">No data yet.</div>' : barChart(s.months.slice(-12));
-  $('#tbl-year').innerHTML = s.years.length ? `<table><tr><th>Year</th><th>km</th><th>Liters</th><th>${c}</th><th>km/L</th><th>Refuels</th></tr>${
-    s.years.map(y=>`<tr><td>${y.period}</td><td>${ni(y.km)}</td><td>${nf(y.liters,1)}</td><td>${ni(y.cost)}</td><td>${nf(y.km_per_l,1)}</td><td>${y.fills}</td></tr>`).join('')}</table>` : '<div class="empty">No data yet.</div>';
+  $('#tbl-year').innerHTML = s.years.length ? `<table><tr><th>Year</th><th>${dLab()}</th><th>${vLab()}</th><th>${c}</th><th>${esc(cl)}</th><th>Refuels</th></tr>${
+    s.years.map(y=>`<tr><td>${y.period}</td><td>${ni(dist(y.km))}</td><td>${nf(vol(y.liters),1)}</td><td>${ni(y.cost)}</td><td>${nf(cons(y.km_per_l),1)}</td><td>${y.fills}</td></tr>`).join('')}</table>` : '<div class="empty">No data yet.</div>';
   const rows = [
     ['Odometer at last refuel', s.last_odometer!=null ? nf(s.last_odometer,1)+' '+unitLabel(v) : '–'],
-    ['Best tank', s.best_segment ? `${nf(s.best_segment.km_per_l,1)} km/L (${fdate(s.best_segment.ts)})` : '–'],
-    ['Worst tank', s.worst_segment ? `${nf(s.worst_segment.km_per_l,1)} km/L (${fdate(s.worst_segment.ts)})` : '–'],
-    ['Average distance between refuels', s.avg_km_per_fill!=null ? ni(s.avg_km_per_fill)+' km' : '–'],
-    ['Average distance per month', s.km_per_month!=null ? ni(s.km_per_month)+' km' : '–'],
-    ['Total liters', nf(s.total_liters,1)+' L'],
-    ['Average fuel price', s.avg_price_per_l!=null ? nf(s.avg_price_per_l,2)+' '+c+'/L' : '–'],
-    ['Last fuel price', s.last_price_per_l!=null ? nf(s.last_price_per_l,2)+' '+c+'/L' : '–'],
-    ['Range on a full tank', s.range_km!=null ? `approx. ${ni(s.range_km)} km` : (v.tank_l ? '–' : 'Set the tank size under Vehicles')],
-    ['CO₂ from fuel burned', `approx. ${ni(s.co2_kg)} kg`],
+    ['Best tank', s.best_segment ? `${nf(cons(s.best_segment.km_per_l),1)} ${esc(cl)} (${fdate(s.best_segment.ts)})` : '–'],
+    ['Worst tank', s.worst_segment ? `${nf(cons(s.worst_segment.km_per_l),1)} ${esc(cl)} (${fdate(s.worst_segment.ts)})` : '–'],
+    ['Average distance between refuels', s.avg_km_per_fill!=null ? ni(dist(s.avg_km_per_fill))+' '+dLab() : '–'],
+    ['Average distance per month', s.km_per_month!=null ? ni(dist(s.km_per_month))+' '+dLab() : '–'],
+    ['Total volume', nf(vol(s.total_liters),1)+' '+vLab()],
+    ['Average fuel price', s.avg_price_per_l!=null ? nf(perVol(s.avg_price_per_l),2)+' '+c+'/'+vLab() : '–'],
+    ['Last fuel price', s.last_price_per_l!=null ? nf(perVol(s.last_price_per_l),2)+' '+c+'/'+vLab() : '–'],
+    ['Range on a full tank', s.range_km!=null ? `approx. ${ni(dist(s.range_km))} ${dLab()}` : (v.tank_l ? '–' : 'Set the tank size under Vehicles')],
+    ['CO₂ from fuel burned', `approx. ${ni(s.co2_kg)} kg` + (s.co2_unknown_l ? ` (${nf(vol(s.co2_unknown_l),1)} ${vLab()} with an unknown fuel type left out)` : '')],
   ];
-  if (mi) rows.splice(1,0,['Average in US mpg', nf(s.avg_us_mpg,1)]);
   $('#more').innerHTML = `<table>${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')}</table>`;
 }
 
@@ -506,18 +559,19 @@ function lineChart(pts, o){
 }
 function barChart(ms){
   const W=400, H=210, L=38, R=36, T=10, B=24;
+  ms = ms.map(m => ({...m, km: dist(m.km), liters: vol(m.liters)}));
   const maxC = Math.max(...ms.map(m=>m.cost), 1), maxKm = Math.max(...ms.map(m=>m.km), 1), bw = (W-L-R)/ms.length;
   let g='';
   for (let i=0;i<=4;i++){ const y=T+(H-T-B)*(1-i/4); g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="var(--grid)"/><text x="${L-6}" y="${y+4}" text-anchor="end">${ni(maxC*i/4)}</text><text x="${W-R+6}" y="${y+4}">${ni(maxKm*i/4)}</text>`; }
   ms.forEach((m,i)=>{
     const x=L+i*bw, h=(H-T-B)*m.cost/maxC, lbl = new Date(m.period+'-01T12:00').toLocaleDateString(LOC,{month:'short'});
-    g+=`<rect x="${x+bw*0.18}" y="${T+(H-T-B)-h}" width="${bw*0.64}" height="${h}" rx="3" fill="var(--c2)"><title>${lbl} ${m.period.slice(0,4)}: ${ni(m.cost)} ${esc(S.cur)}, ${ni(m.km)} km, ${nf(m.liters,1)} L</title></rect>`;
+    g+=`<rect x="${x+bw*0.18}" y="${T+(H-T-B)-h}" width="${bw*0.64}" height="${h}" rx="3" fill="var(--c2)"><title>${lbl} ${m.period.slice(0,4)}: ${ni(m.cost)} ${esc(S.cur)}, ${ni(m.km)} ${dLab()}, ${nf(m.liters,1)} ${vLab()}</title></rect>`;
     g+=`<text x="${x+bw/2}" y="${H-6}" text-anchor="middle">${lbl}</text>`;
   });
   const py = m => T+(H-T-B)*(1-m.km/maxKm), px = i => L+i*bw+bw/2;
   if (ms.length>1) g+=`<path d="${ms.map((m,i)=>`${i?'L':'M'}${px(i).toFixed(1)},${py(m).toFixed(1)}`).join(' ')}" fill="none" stroke="var(--c3)" stroke-width="2.5"/>`;
   g+=ms.map((m,i)=>`<circle cx="${px(i)}" cy="${py(m)}" r="3.5" fill="var(--c3)"/>`).join('');
-  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">${g}</svg><div class="legend"><span style="color:var(--c2)">■</span> ${esc(S.cur)} (left axis) &nbsp; <span style="color:var(--c3)">●</span> km driven (right axis)</div>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">${g}</svg><div class="legend"><span style="color:var(--c2)">■</span> ${esc(S.cur)} (left axis) &nbsp; <span style="color:var(--c3)">●</span> ${dLab()} driven (right axis)</div>`;
 }
 
 // ---------- vehicles
@@ -533,7 +587,7 @@ function carForm(v){
     <div class="f"><label>Name</label><input type="text" name="name" value="${esc(v.name)}" placeholder="e.g. Jeep, Family car"></div>
     <div class="grid2">
       <div class="f"><label>Odometer shows</label><select name="odo_unit"><option value="km" ${v.odo_unit!=='mi'?'selected':''}>km</option><option value="mi" ${v.odo_unit==='mi'?'selected':''}>miles</option></select></div>
-      <div class="f"><label>Tank size (liters)</label><input type="number" inputmode="decimal" name="tank_l" value="${v.tank_l ?? ''}" placeholder="optional"></div>
+      <div class="f"><label>Tank size (${vLab()})</label><input type="number" inputmode="decimal" name="tank_l" value="${v.tank_l ? parseFloat(vol(v.tank_l).toFixed(1)) : ''}" placeholder="optional"></div>
     </div>
     <div class="f"><label>Odometer rolls over at</label><input type="number" name="odo_rollover" value="${v.odo_rollover || ''}" placeholder="never">
       <div class="hint">Old mechanical odometers with 5 digits roll over at 100000. Leave empty if it never rolls over.</div></div>
@@ -548,10 +602,13 @@ function bindCarForms(){
   $$('[data-savecar]').forEach(b => b.onclick = async () => {
     const c = b.closest('[data-car]'), g = n => c.querySelector(`[name=${n}]`);
     try {
-      const r = await api('api/vehicles', {method:'POST', body: JSON.stringify({id: c.dataset.car || null, name: g('name').value, odo_unit: g('odo_unit').value, tank_l: g('tank_l').value, odo_rollover: g('odo_rollover').value, active: g('active').checked})});
+      const r = await api('api/vehicles', {method:'POST', body: JSON.stringify({id: c.dataset.car || null, name: g('name').value, odo_unit: g('odo_unit').value, tank_l: volIn(g('tank_l').value), odo_rollover: g('odo_rollover').value, active: g('active').checked})});
       toast(c.dataset.car ? 'Saved' : 'Vehicle added');
       if (!c.dataset.car) { S.vid = r.id; try{localStorage.setItem('ft_vid', S.vid)}catch(e){} }
-      await loadVehicles(); renderCarForms();
+      const first = S.vehicles.filter(x=>x.active).length === 0;
+      await loadVehicles();
+      if (first && !c.dataset.car) { showTab('tank'); return; }
+      renderCarForms();
     } catch(e){ toast(e.message); }
   });
   $$('[data-cancelcar]').forEach(b => b.onclick = () => b.closest('[data-car]').remove());
@@ -566,13 +623,55 @@ function bindCarForms(){
 function addCarForm(){ $('#car-forms').insertAdjacentHTML('beforeend', carForm(null)); bindCarForms(); const f=$$('#car-forms [data-car=""] [name=name]').pop(); if (f) f.focus(); }
 $('#add-car').onclick = addCarForm;
 
+// ---------- settings
+async function renderSettings(){
+  const c = S.cfg;
+  $('#set-currency').value = c.currency; $('#set-distance').value = c.distance_unit; $('#set-volume').value = c.volume_unit;
+  $('#set-warn').value = c.warn_distance ?? ''; $('#set-publish').checked = !!c.publish_sensors;
+  updateConsOptions(); $('#set-cons').value = c.consumption_style;
+  $('#set-fuels').innerHTML = ''; (c.fuel_types||[]).forEach(f => addFuelRow(f));
+  let ents = []; try { ents = await api('api/ai_entities'); } catch(e){}
+  if (!ents.find(e => e.entity_id === c.ai_task_entity)) ents.unshift({entity_id:c.ai_task_entity, name:c.ai_task_entity + (ents.length ? ' (not found)' : '')});
+  $('#set-ai').innerHTML = ents.map(e => `<option value="${esc(e.entity_id)}" ${e.entity_id===c.ai_task_entity?'selected':''}>${esc(e.name)} (${esc(e.entity_id)})</option>`).join('');
+}
+function updateConsOptions(){
+  const save = {distance_unit:S.cfg.distance_unit, volume_unit:S.cfg.volume_unit};
+  S.cfg.distance_unit = $('#set-distance').value; S.cfg.volume_unit = $('#set-volume').value;
+  $('#set-cons').options[0].textContent = consLabel('dpv') + ' (distance per volume)';
+  $('#set-cons').options[1].textContent = consLabel('vp100') + ' (volume per 100 distance)';
+  $('#set-warn-unit').textContent = dLab();
+  Object.assign(S.cfg, save);
+}
+['#set-distance','#set-volume'].forEach(id => $(id).addEventListener('change', updateConsOptions));
+function addFuelRow(f){
+  f = f || {name:'', co2_kg_per_l:''};
+  const d = document.createElement('div'); d.className = 'ftrow';
+  d.innerHTML = `<input type="text" data-fn value="${esc(f.name)}" placeholder="Fuel name"><input type="number" step="0.01" data-fc value="${f.co2_kg_per_l ?? ''}" placeholder="kg/L"><button class="btn small danger" aria-label="Remove">✕</button>`;
+  d.querySelector('button').onclick = () => d.remove();
+  $('#set-fuels').appendChild(d);
+}
+$('#add-fuel').onclick = () => addFuelRow();
+$('#save-settings').onclick = async () => {
+  try {
+    S.cfg = await api('api/settings', {method:'POST', body: JSON.stringify({
+      currency: $('#set-currency').value, distance_unit: $('#set-distance').value, volume_unit: $('#set-volume').value,
+      consumption_style: $('#set-cons').value, warn_distance: $('#set-warn').value, ai_task_entity: $('#set-ai').value,
+      publish_sensors: $('#set-publish').checked,
+      fuel_types: $$('#set-fuels .ftrow').map(r => ({name: r.querySelector('[data-fn]').value, co2_kg_per_l: r.querySelector('[data-fc]').value})),
+    })});
+    S.cur = S.cfg.currency; applyUnitLabels(); toast('Settings saved'); renderSettings();
+  } catch(e){ toast(e.message); }
+};
+
 // ---------- start
 (async () => {
   try {
     const st = await api('api/status');
-    S.cur = st.currency || 'kr'; $$('.cur').forEach(e => e.textContent = S.cur);
-    $('#ver').textContent = `v${st.version} · AI: ${st.ai_entity}`;
-    await loadVehicles(); resetForm(); await refresh();
+    S.cfg = st.settings; S.cur = S.cfg.currency; applyUnitLabels();
+    $('#ver').textContent = `Fuel Tracker v${st.version}`;
+    await loadVehicles(); resetForm();
+    // start on statistics when the selected vehicle already has refuels
+    const v = veh(); showTab(v && v.fill_count ? 'stats' : 'tank');
   } catch(e){ toast('Could not start: '+e.message); }
 })();
 </script>

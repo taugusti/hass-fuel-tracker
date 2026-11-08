@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
 MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
 MEDIA_SUB = "fuel_tracker"
@@ -31,7 +31,6 @@ HA_API = os.environ.get("FT_HA_API", "http://supervisor/core/api")
 PORT = int(os.environ.get("FT_PORT", "8099"))
 DEV = os.environ.get("FT_DEV") == "1"
 KM_PER_MI = 1.609344
-CO2_KG_PER_L = {"petrol": 2.31, "diesel": 2.68}  # approx. tank-to-wheel
 
 
 def _container_env(name):
@@ -58,18 +57,25 @@ if _tz:
         pass
 
 
-def load_options():
-    try:
-        with open(os.path.join(DATA_DIR, "options.json"), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-OPTIONS = load_options()
-AI_ENTITY = OPTIONS.get("ai_task_entity") or "ai_task.claude_ai_task"
-PUBLISH = OPTIONS.get("publish_sensors", True)
-CURRENCY = (OPTIONS.get("currency") or "kr").strip() or "kr"
+# Defaults only - every value can be changed in the app (Settings)
+DEFAULT_SETTINGS = {
+    "currency": "kr",
+    "distance_unit": "km",          # km | mi
+    "volume_unit": "L",             # L | gal_us | gal_uk
+    "consumption_style": "dpv",     # dpv = distance per volume (km/L, mpg) | vp100 = volume per 100 distance (L/100 km)
+    "ai_task_entity": "ai_task.claude_ai_task",
+    "publish_sensors": True,
+    "warn_distance": 2000,          # in the chosen distance unit
+    "fuel_types": [
+        {"name": "Petrol 95 E10", "co2_kg_per_l": 2.31},
+        {"name": "Petrol 95 E5", "co2_kg_per_l": 2.31},
+        {"name": "Petrol 98", "co2_kg_per_l": 2.31},
+        {"name": "Diesel", "co2_kg_per_l": 2.68},
+    ],
+}
+KM_PER = {"km": 1.0, "mi": KM_PER_MI}
+L_PER = {"L": 1.0, "gal_us": 3.785411784, "gal_uk": 4.54609}
+VOL_LABEL = {"L": "L", "gal_us": "gal", "gal_uk": "gal"}
 
 DB_LOCK = threading.Lock()
 PUBLISH_LOCK = threading.Lock()
@@ -100,6 +106,10 @@ def init_db():
                 odo_rollover REAL NOT NULL DEFAULT 0,
                 tank_l REAL,
                 active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS fills (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,6 +144,53 @@ def execute(sql, args=()):
         return con.execute(sql, args).lastrowid
 
 
+def get_settings():
+    s = json.loads(json.dumps(DEFAULT_SETTINGS))
+    for r in rows("SELECT key, value FROM settings"):
+        if r["key"] in s:
+            try:
+                s[r["key"]] = json.loads(r["value"])
+            except ValueError:
+                pass
+    return s
+
+
+def save_settings(new):
+    cur = get_settings()
+    clean = {}
+    if "currency" in new:
+        clean["currency"] = str(new["currency"]).strip()[:12] or DEFAULT_SETTINGS["currency"]
+    if new.get("distance_unit") in KM_PER:
+        clean["distance_unit"] = new["distance_unit"]
+    if new.get("volume_unit") in L_PER:
+        clean["volume_unit"] = new["volume_unit"]
+    if new.get("consumption_style") in ("dpv", "vp100"):
+        clean["consumption_style"] = new["consumption_style"]
+    if "ai_task_entity" in new:
+        e = str(new["ai_task_entity"]).strip()
+        if not re.fullmatch(r"ai_task\.[a-z0-9_]+", e):
+            raise ValueError("AI Task entity must look like ai_task.something")
+        clean["ai_task_entity"] = e
+    if "publish_sensors" in new:
+        clean["publish_sensors"] = bool(new["publish_sensors"])
+    if "warn_distance" in new:
+        w = to_num(new["warn_distance"])
+        clean["warn_distance"] = w if w and w > 0 else None
+    if "fuel_types" in new and isinstance(new["fuel_types"], list):
+        fts = []
+        for ft in new["fuel_types"]:
+            name = str((ft or {}).get("name") or "").strip()
+            if name:
+                fts.append({"name": name[:40], "co2_kg_per_l": to_num(ft.get("co2_kg_per_l"))})
+        clean["fuel_types"] = fts
+    with DB_LOCK, db() as con:
+        for k, v in clean.items():
+            con.execute("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (k, json.dumps(v)))
+    cur.update(clean)
+    return cur
+
+
 def get_vehicle(vid):
     r = rows("SELECT * FROM vehicles WHERE id=?", (vid,))
     return r[0] if r else None
@@ -161,9 +218,10 @@ def ha_request(method, path, payload=None, timeout=90):
 
 PUMP_INSTRUCTIONS = """The image shows the display of a fuel pump at a filling station.
 Read:
-- liters: the volume dispensed in liters (often labelled "Liter", "Litres", "Volume", "Ltr").
+- liters: the volume dispensed, as the number shown (often labelled "Liter", "Litres", "Volume", "Ltr", "Gallons").
+- volume_unit: "L" if the display shows liters, "gal" if it shows gallons, otherwise "unknown".
 - total_price: the amount to pay (often labelled "Amount", "Total", "Sale", "Beløb", "Betrag", "Kr", "€").
-- price_per_liter: the unit price per liter.
+- price_per_liter: the unit price per liter (or per gallon if the display uses gallons).
 - fuel_type: the fuel grade if visible (e.g. "Petrol 95 E10", "Diesel"), otherwise leave empty.
 Many displays use a comma as decimal separator: "38,47" means 38.47. Return numbers with a dot.
 If a number cannot be read reliably, omit the field rather than guessing.
@@ -185,7 +243,8 @@ BOOL = {"boolean": {}}
 PUMP_STRUCTURE = {
     "liters": {"selector": NUM, "description": "Liters dispensed"},
     "total_price": {"selector": NUM, "description": "Total amount"},
-    "price_per_liter": {"selector": NUM, "description": "Price per liter"},
+    "price_per_liter": {"selector": NUM, "description": "Price per liter or gallon"},
+    "volume_unit": {"selector": TXT, "description": "L, gal or unknown"},
     "fuel_type": {"selector": TXT, "description": "Fuel grade"},
     "note": {"selector": TXT, "description": "Short note about uncertainties"},
 }
@@ -220,7 +279,7 @@ def ai_read(kind, filename):
     structure = PUMP_STRUCTURE if kind == "pump" else ODO_STRUCTURE
     base = {
         "task_name": "Read fuel pump display" if kind == "pump" else "Read odometer",
-        "entity_id": AI_ENTITY,
+        "entity_id": get_settings()["ai_task_entity"],
         "attachments": [{
             "media_content_id": f"media-source://media_source/local/{MEDIA_SUB}/{filename}",
             "media_content_type": "image/jpeg",
@@ -269,11 +328,16 @@ def slugify(name):
     return re.sub(r"[^a-z0-9]+", "_", s).strip("_") or "vehicle"
 
 
-def co2_factor(fuel_type):
-    return CO2_KG_PER_L["diesel"] if "diesel" in (fuel_type or "").lower() else CO2_KG_PER_L["petrol"]
+def co2_factor(fuel_type, fuel_types):
+    name = (fuel_type or "").strip().lower()
+    for ft in fuel_types:
+        if ft["name"].strip().lower() == name:
+            return ft.get("co2_kg_per_l")
+    return None
 
 
-def compute_stats(vehicle):
+def compute_stats(vehicle, settings=None):
+    settings = settings or get_settings()
     fills = rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (vehicle["id"],))
     factor = KM_PER_MI if vehicle["odo_unit"] == "mi" else 1.0
     roll = vehicle["odo_rollover"] or 0
@@ -369,14 +433,12 @@ def compute_stats(vehicle):
 
     return {
         "vehicle": vehicle,
-        "currency": CURRENCY,
         "count": len(fills),
         "tracked_km": tracked_km,
         "total_liters": total_l,
         "total_cost": total_cost,
         "avg_km_per_l": avg_kmpl,
         "avg_l_per_100km": (seg_l / seg_km * 100) if seg_km else None,
-        "avg_us_mpg": avg_kmpl * 2.352145 if avg_kmpl else None,
         "avg_cost_per_km": (seg_cost / seg_cost_km) if seg_cost_km else None,
         "avg_price_per_l": (sum(p["price_per_l"] for p in prices) / len(prices)) if prices else None,
         "last_price_per_l": prices[-1]["price_per_l"] if prices else None,
@@ -389,7 +451,8 @@ def compute_stats(vehicle):
         "avg_km_per_fill": (tracked_km / (len(odo_fills) - 1)) if len(odo_fills) > 1 else None,
         "km_per_month": (tracked_km / span_days * 30.44) if span_days and tracked_km else None,
         "range_km": (vehicle["tank_l"] * avg_kmpl) if (vehicle.get("tank_l") and avg_kmpl) else None,
-        "co2_kg": sum((f["liters"] or 0) * co2_factor(f["fuel_type"]) for f in fills),
+        "co2_kg": sum((f["liters"] or 0) * (co2_factor(f["fuel_type"], settings["fuel_types"]) or 0) for f in fills),
+        "co2_unknown_l": sum((f["liters"] or 0) for f in fills if co2_factor(f["fuel_type"], settings["fuel_types"]) is None),
         "year": year,
         "year_cost": sum(f["price_total"] or 0 for f in fills if f["ts"].startswith(year)),
         "year_km": sum(f["dist_km"] or 0 for f in fills if f["ts"].startswith(year)),
@@ -422,7 +485,8 @@ def _save_published(ids):
 
 
 def publish_sensors():
-    if not PUBLISH:
+    cfg = get_settings()
+    if not cfg["publish_sensors"]:
         return
     if not TOKEN:
         log("No SUPERVISOR_TOKEN - cannot publish sensors")
@@ -432,20 +496,34 @@ def publish_sensors():
         failed = False
         for v in rows("SELECT * FROM vehicles WHERE active=1"):
             try:
-                st = compute_stats(v)
+                st = compute_stats(v, cfg)
             except Exception:
                 log("Statistics error", traceback.format_exc())
                 continue
             slug = slugify(v["name"])
             last_seg = st["last_segment"]
             odo_unit = "mi" if v["odo_unit"] == "mi" else "km"
+            cur = cfg["currency"]
+            du, vu = cfg["distance_unit"], cfg["volume_unit"]
+            dl, vl = du, VOL_LABEL[vu]
+
+            def cons(kmpl):
+                if not kmpl:
+                    return None
+                dpv = kmpl * L_PER[vu] / KM_PER[du]
+                return dpv if cfg["consumption_style"] == "dpv" else 100 / dpv
+            cons_unit = f"{dl}/{vl}" if cfg["consumption_style"] == "dpv" else f"{vl}/100 {dl}"
+            if cons_unit == "mi/gal":
+                cons_unit = "mpg"
+            per_dist = lambda x: x * KM_PER[du] if x is not None else None
+            per_vol = lambda x: x * L_PER[vu] if x is not None else None
             sensors = {
-                "km_per_l_last": (last_seg["km_per_l"] if last_seg else None, "km/L", "mdi:gas-station", "km/L last tank"),
-                "km_per_l_avg": (st["avg_km_per_l"], "km/L", "mdi:gas-station-outline", "km/L average"),
+                "consumption_last": (cons(last_seg["km_per_l"]) if last_seg else None, cons_unit, "mdi:gas-station", "Consumption last tank"),
+                "consumption_avg": (cons(st["avg_km_per_l"]), cons_unit, "mdi:gas-station-outline", "Consumption average"),
                 "odometer": (st["last_odometer"], odo_unit, "mdi:counter", "Odometer at last refuel"),
-                "cost_per_km": (st["avg_cost_per_km"], f"{CURRENCY}/km", "mdi:cash", "Fuel cost per km"),
-                "fuel_price": (st["last_price_per_l"], f"{CURRENCY}/L", "mdi:currency-usd", "Last fuel price"),
-                "cost_this_year": (st["year_cost"], CURRENCY, "mdi:cash-multiple", f"Fuel cost {st['year']}"),
+                "cost_per_distance": (per_dist(st["avg_cost_per_km"]), f"{cur}/{dl}", "mdi:cash", f"Fuel cost per {dl}"),
+                "fuel_price": (per_vol(st["last_price_per_l"]), f"{cur}/{vl}", "mdi:currency-usd", "Last fuel price"),
+                "cost_this_year": (st["year_cost"], cur, "mdi:cash-multiple", f"Fuel cost {st['year']}"),
                 "last_refuel": (st["last_fill"]["ts"] if st["last_fill"] else None, None, "mdi:calendar", "Last refuel"),
             }
             for key, (val, unit, icon, label) in sensors.items():
@@ -565,7 +643,23 @@ class Handler(BaseHTTPRequestHandler):
                 with open(os.path.join(STATIC_DIR, "index.html"), "rb") as f:
                     return self.send_bytes(f.read(), "text/html; charset=utf-8", {"Cache-Control": "no-cache"})
             if p == "/api/status":
-                return self.send_json({"ai_entity": AI_ENTITY, "has_token": bool(TOKEN), "version": VERSION, "currency": CURRENCY})
+                return self.send_json({"has_token": bool(TOKEN), "version": VERSION, "settings": get_settings()})
+            if p == "/api/settings":
+                if method == "GET":
+                    return self.send_json(get_settings())
+                if method == "POST":
+                    res = save_settings(self.read_json())
+                    publish_async()
+                    return self.send_json(res)
+            if p == "/api/ai_entities":
+                try:
+                    states = ha_request("GET", "/states", timeout=15) or []
+                    ents = [{"entity_id": x["entity_id"], "name": x.get("attributes", {}).get("friendly_name") or x["entity_id"]}
+                            for x in states if x.get("entity_id", "").startswith("ai_task.")]
+                except Exception as e:
+                    log("Could not list AI Task entities", repr(e))
+                    ents = []
+                return self.send_json(ents)
 
             if p == "/api/vehicles":
                 if method == "GET":
@@ -667,9 +761,10 @@ class Handler(BaseHTTPRequestHandler):
                 w = csv.writer(out)
                 cols = ["ts", "odometer", "liters", "price_total", "price_per_l", "full_tank",
                         "missed_previous", "fuel_type", "station", "note"]
+                cur = get_settings()["currency"]
                 w.writerow(["vehicle", "odometer_unit", "currency"] + cols)
                 for r in rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (v["id"],)):
-                    w.writerow([v["name"], v["odo_unit"], CURRENCY] + ["" if r[c] is None else r[c] for c in cols])
+                    w.writerow([v["name"], v["odo_unit"], cur] + ["" if r[c] is None else r[c] for c in cols])
                 fn = slugify(v["name"]) + "-fuel.csv"
                 return self.send_bytes(("﻿" + out.getvalue()).encode("utf-8"), "text/csv; charset=utf-8",
                                        {"Content-Disposition": f'attachment; filename="{fn}"'})
@@ -692,8 +787,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    log(f"Fuel Tracker {VERSION} starting on port {PORT} - AI entity: {AI_ENTITY}, "
-        f"token: {'yes' if TOKEN else 'MISSING'}, currency: {CURRENCY}")
+    cfg = get_settings()
+    log(f"Fuel Tracker {VERSION} starting on port {PORT} - AI entity: {cfg['ai_task_entity']}, "
+        f"token: {'yes' if TOKEN else 'MISSING'}")
     publish_async()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

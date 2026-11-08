@@ -14,15 +14,20 @@ An AI Task entity that supports attachments (images), e.g. the Anthropic (Claude
 
 When you use **Choose** (an existing photo), the date and time are taken from the photo's EXIF capture time (the pump photo wins over the odometer photo). Without EXIF, the file date is used and you are asked to check it.
 
-Consumption (km/L) is calculated from full tank to full tank. Liters from partial refuels are added to the next full refuel. If you forgot to log a refuel, tick "A refuel is missing since the last one" so that period does not give a wrong number.
+Consumption is calculated from full tank to full tank. Liters from partial refuels are added to the next full refuel. If you forgot to log a refuel, tick "A refuel is missing since the last one" so that period does not give a wrong number.
 
 ## Vehicles
 Add, edit and delete vehicles under **Vehicles**: name, whether the odometer shows km or miles, when the odometer rolls over (old 5-digit mechanical odometers: 100000) and the tank size (gives the range). Deleting a vehicle also deletes its refuels and photos.
 
-## Options
-- `ai_task_entity`: the AI Task entity (default `ai_task.claude_ai_task`).
-- `publish_sensors`: exposes `sensor.fuel_tracker_<vehicle>_*` in Home Assistant (km/L last tank and average, odometer, cost per km, fuel price, cost this year, last refuel). The sensors are recreated when the app starts and removed when a vehicle is deleted or renamed.
-- `currency`: currency label shown in the app and on sensors (default `kr`).
+## Settings
+Everything is configured in the app under **Settings** (the app has no options in Home Assistant's app configuration):
+- Currency label.
+- Distance unit (km or miles) and volume unit (liters, US gallons or UK gallons). Data is stored in km and liters, so you can switch units at any time.
+- Consumption shown as distance per volume (km/L, mpg) or volume per 100 distance (L/100 km, gal/100 mi).
+- Warning threshold for the distance since the last refuel.
+- Fuel types (suggested in the form) with a CO₂ factor in kg per liter for the CO₂ statistic.
+- The AI Task entity that reads the photos (must support attachments, e.g. `ai_task.claude_ai_task`).
+- Whether to publish sensors `sensor.fuel_tracker_<vehicle>_*` (consumption last tank and average, odometer, cost per distance, fuel price, cost this year, last refuel) in the chosen units. Sensors of deleted or renamed vehicles are removed.
 
 ## Data
 - Database: `/data/fuel_tracker.db` (included in the app's backup).

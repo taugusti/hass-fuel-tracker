@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.0 – 2026-11-14
+- Odometer-only entries ("Odometer reading only (no fuel)"), e.g. the reading when the vehicle was bought. They count for distance but not for consumption, cost, number of refuels or "last refuel".
+
 ## 0.4.2 – 2026-11-08
 - The page reloads itself when a newer version of the app is installed (the HA app keeps old pages open). The version next to the title is the version of the page you are looking at.
 

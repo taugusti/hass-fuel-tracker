@@ -114,7 +114,7 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
   <section id="tab-tank">
     <div style="margin-bottom:12px"><button class="btn small" data-go="stats">← Statistics</button></div>
     <div class="shots">
-      <div class="shot" id="shot-pump">
+      <div class="shot fuelonly" id="shot-pump">
         <div class="ttl">Pump display</div>
         <img class="hide" alt="">
         <div class="status">Liters and price</div>
@@ -139,8 +139,9 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
     <div class="card">
       <h2 id="form-title">New refuel</h2>
       <div id="ai-box"></div>
+      <label class="check"><input type="checkbox" id="odoonly"><span>Odometer reading only (no fuel)<small>E.g. the reading when you bought the vehicle. Counts for distance, not for consumption or cost.</small></span></label>
       <div class="f"><label>Date and time<span class="ai" id="ai-ts"></span></label><input type="datetime-local" id="ts"></div>
-      <div class="grid3">
+      <div class="grid3 fuelonly">
         <div class="f"><label>Volume (<span class="vu"></span>)<span class="ai" id="ai-liters"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="liters"></div>
         <div class="f"><label>Total <span class="cur"></span><span class="ai" id="ai-total"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="total"></div>
         <div class="f"><label><span class="cur"></span>/<span class="vu"></span><span class="ai" id="ai-ppl"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="ppl"></div>
@@ -148,10 +149,10 @@ svg text{fill:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
       <div class="f"><label>Odometer (<span id="odo-unit">km</span>)<span class="ai" id="ai-odo"></span></label><input type="text" inputmode="decimal" autocomplete="off" class="num" id="odo"></div>
       <div class="hint" id="preview" style="margin:-4px 0 6px"></div>
       <div id="warns"></div>
-      <label class="check"><input type="checkbox" id="full" checked><span>Filled to the top<small>Consumption is calculated from full tank to full tank</small></span></label>
-      <label class="check"><input type="checkbox" id="missed"><span>A refuel is missing since the last one<small>This period is then left out of the km/L calculation</small></span></label>
+      <label class="check fuelonly"><input type="checkbox" id="full" checked><span>Filled to the top<small>Consumption is calculated from full tank to full tank</small></span></label>
+      <label class="check fuelonly"><input type="checkbox" id="missed"><span>A refuel is missing since the last one<small>This period is then left out of the km/L calculation</small></span></label>
       <div class="grid2">
-        <div class="f"><label>Fuel</label><input type="text" id="fuel" list="fuels"></div>
+        <div class="f fuelonly"><label>Fuel</label><input type="text" id="fuel" list="fuels"></div>
         <div class="f"><label>Station</label><input type="text" id="station" list="stations"></div>
       </div>
       <datalist id="fuels"></datalist>
@@ -526,7 +527,15 @@ function checkWarnings(){
   if (v && v.tank_l && L > vol(v.tank_l) * 1.05) w.push(`${nf(L,2)} ${vLab()} is more than the tank size (${nf(vol(v.tank_l),1)} ${vLab()}).`);
   $('#warns').innerHTML = w.map(x => `<div class="warn">⚠️ ${esc(x)}</div>`).join('');
 }
-function updateSave(){ $('#save').disabled = S.busy>0; $('#save').textContent = S.busy>0 ? 'Waiting for reading…' : (S.editId?'Save changes':'Save refuel'); }
+function applyOdoOnly(){
+  const on = $('#odoonly').checked;
+  $$('.fuelonly').forEach(e => e.classList.toggle('hide', on));
+  $('.shots').style.gridTemplateColumns = on ? '1fr' : '';
+  if (!S.editId) $('#form-title').textContent = on ? 'New odometer reading' : 'New refuel';
+  updateSave(); checkWarnings();
+}
+$('#odoonly').addEventListener('change', applyOdoOnly);
+function updateSave(){ $('#save').disabled = S.busy>0; $('#save').textContent = S.busy>0 ? 'Waiting for reading…' : (S.editId?'Save changes':($('#odoonly').checked?'Save odometer reading':'Save refuel')); }
 function fillStationList(){
   $('#stations').innerHTML = [...new Set(S.fills.map(f=>f.station).filter(Boolean))].map(s=>`<option>${esc(s)}</option>`).join('');
 }
@@ -538,17 +547,18 @@ function resetForm(){
   S.editId=null; S.shots={pump:null,odo:null}; S.ai={pump:null,odo:null};
   ['#liters','#total','#ppl','#odo','#station','#note','#fuel'].forEach(id=>$(id).value='');
   clearAIState();
-  $('#ts').value = nowLocal(); $('#full').checked = true; $('#missed').checked = false;
+  $('#ts').value = nowLocal(); $('#full').checked = true; $('#missed').checked = false; $('#odoonly').checked = false;
   ['pump','odo'].forEach(k=>{ const b=$('#shot-'+k); b.classList.remove('has'); b.querySelector('img').classList.add('hide'); const st=b.querySelector('.status'); st.classList.remove('err'); st.textContent = k==='pump'?'Liters and price':'Total distance'; });
-  $('#form-title').textContent='New refuel'; $('#cancel-edit').classList.add('hide'); $('#warns').innerHTML=''; updateSave();
+  $('#form-title').textContent='New refuel'; $('#cancel-edit').classList.add('hide'); $('#warns').innerHTML=''; applyOdoOnly();
   const lastFuel = S.fills.find(f=>f.fuel_type); if (lastFuel) $('#fuel').value = lastFuel.fuel_type;
 }
 $('#cancel-edit').onclick = resetForm;
 $('#save').onclick = async () => {
-  const badIds = ['#liters','#total','#ppl','#odo'].filter(id => $(id).value.trim() && num(id)==null);
+  const odoOnly = $('#odoonly').checked;
+  const badIds = (odoOnly ? ['#odo'] : ['#liters','#total','#ppl','#odo']).filter(id => $(id).value.trim() && num(id)==null);
   if (badIds.length) { toast('Some numbers could not be read – check the highlighted fields'); badIds.forEach(id => $(id).style.borderColor='var(--bad)'); return; }
   const body = {
-    id: S.editId, vehicle_id: S.vid, ts: $('#ts').value,
+    id: S.editId, vehicle_id: S.vid, ts: $('#ts').value, odometer_only: odoOnly,
     liters: volIn(num('#liters')), price_total: num('#total'), price_per_l: perVolIn(num('#ppl')),
     odometer: num('#odo'), full_tank: $('#full').checked, missed_previous: $('#missed').checked,
     fuel_type: $('#fuel').value.trim(), station: $('#station').value.trim(), note: $('#note').value.trim(),
@@ -556,7 +566,7 @@ $('#save').onclick = async () => {
   };
   try {
     await api('api/fills', {method:'POST', body: JSON.stringify(body)});
-    toast(S.editId ? 'Changes saved' : 'Refuel saved');
+    toast(S.editId ? 'Changes saved' : (odoOnly ? 'Odometer reading saved' : 'Refuel saved'));
     S.fills = await api('api/fills?vehicle='+S.vid);
     resetForm(); showTab('stats');
   } catch(e){ toast('Could not save: ' + e.message); }
@@ -565,12 +575,13 @@ function editFill(f){
   showTab('tank'); clearAIState();
   S.editId = f.id; S.shots = {pump:f.img_pump, odo:f.img_odo};
   try { S.ai = {pump: f.ai_pump?JSON.parse(f.ai_pump):null, odo: f.ai_odo?JSON.parse(f.ai_odo):null}; } catch(e){ S.ai={pump:null,odo:null}; }
-  $('#ts').value = f.ts; $('#liters').value = fmtIn(vol(f.liters),2); $('#total').value = fmtIn(f.price_total,2); $('#ppl').value = fmtIn(perVol(f.price_per_l),3);
+  $('#ts').value = f.ts; $('#liters').value = f.liters ? fmtIn(vol(f.liters),2) : ''; $('#total').value = fmtIn(f.price_total,2); $('#ppl').value = fmtIn(perVol(f.price_per_l),3);
   $('#odo').value = fmtIn(f.odometer,1); $('#full').checked = !!f.full_tank; $('#missed').checked = !!f.missed_previous;
   $('#fuel').value = f.fuel_type||''; $('#station').value = f.station||''; $('#note').value = f.note||'';
   ['pump','odo'].forEach(k => { const b=$('#shot-'+k), im=b.querySelector('img'), fn=k==='pump'?f.img_pump:f.img_odo;
     if (fn){ im.src='api/img/'+fn; im.classList.remove('hide'); b.classList.add('has'); b.querySelector('.status').textContent='Saved photo'; } else { im.classList.add('hide'); b.classList.remove('has'); } });
-  $('#form-title').textContent = 'Edit refuel'; $('#cancel-edit').classList.remove('hide'); updateSave();
+  $('#odoonly').checked = !f.liters;
+  $('#form-title').textContent = f.liters ? 'Edit refuel' : 'Edit odometer reading'; $('#cancel-edit').classList.remove('hide'); applyOdoOnly();
   updatePreview(); scrollTo(0,0);
 }
 
@@ -583,7 +594,7 @@ function renderLog(){
     <div class="item">
       <div class="thumbs">${[f.img_pump,f.img_odo].filter(Boolean).map(i=>`<img src="api/img/${i}" data-full="api/img/${i}" alt="">`).join('')}</div>
       <div class="main">
-        <div class="t">${nf(vol(f.liters),2)} ${vLab()} · ${nf(f.price_total,2)} ${esc(S.cur)} ${f.full_tank?'':'<span class="tag">partial</span>'}${f.missed_previous?'<span class="tag">gap before</span>':''}</div>
+        <div class="t">${f.liters ? `${nf(vol(f.liters),2)} ${vLab()} · ${nf(f.price_total,2)} ${esc(S.cur)} ${f.full_tank?'':'<span class="tag">partial</span>'}${f.missed_previous?'<span class="tag">gap before</span>':''}` : 'Odometer reading <span class="tag">no fuel</span>'}</div>
         <div class="d">${fdate(f.ts)} · ${f.odometer!=null?nf(f.odometer,1)+' '+unitLabel(v):'no odometer'}${f.station?' · '+esc(f.station):''}${f.price_per_l?' · '+nf(perVol(f.price_per_l),2)+' '+esc(S.cur)+'/'+vLab():''}</div>
         ${f.note?`<div class="d">${esc(f.note)}</div>`:''}
       </div>
@@ -591,7 +602,7 @@ function renderLog(){
       <button class="btn small danger" data-del="${f.id}" aria-label="Delete">✕</button>
     </div>`).join('');
   $$('[data-edit]').forEach(b => b.onclick = () => editFill(S.fills.find(f=>f.id===+b.dataset.edit)));
-  $$('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Delete this refuel?')) return; await api('api/fills/'+b.dataset.del, {method:'DELETE'}); toast('Deleted'); refresh(); });
+  $$('[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Delete this entry?')) return; await api('api/fills/'+b.dataset.del, {method:'DELETE'}); toast('Deleted'); refresh(); });
   $$('.thumbs img').forEach(i => i.onclick = () => { $('#lb img').src=i.dataset.full; $('#lb').style.display='flex'; });
 }
 $('#lb').onclick = () => $('#lb').style.display='none';

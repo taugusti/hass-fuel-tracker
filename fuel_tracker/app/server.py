@@ -21,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 DATA_DIR = os.environ.get("FT_DATA_DIR", "/data")
 MEDIA_ROOT = os.environ.get("FT_MEDIA_ROOT", "/media")
 MEDIA_SUB = "fuel_tracker"
@@ -361,6 +361,11 @@ def co2_factor(fuel_type, fuel_types):
     return None
 
 
+def _avg_between_refuels(odo_fills):
+    real = [f for f in odo_fills if f["liters"]]
+    return (real[-1]["cum_km"] - real[0]["cum_km"]) / (len(real) - 1) if len(real) > 1 else None
+
+
 def compute_stats(vehicle, settings=None):
     settings = settings or get_settings()
     fills = rows("SELECT * FROM fills WHERE vehicle_id=? ORDER BY ts, id", (vehicle["id"],))
@@ -429,7 +434,7 @@ def compute_stats(vehicle, settings=None):
             b = out.setdefault(f["ts"][:key_len], {"period": f["ts"][:key_len], "km": 0.0, "liters": 0.0, "cost": 0.0, "fills": 0, "_sk": 0.0, "_sl": 0.0})
             b["liters"] += f["liters"] or 0
             b["cost"] += f["price_total"] or 0
-            b["fills"] += 1
+            b["fills"] += 1 if f["liters"] else 0
             b["km"] += f["dist_km"] or 0
         for s in segments:
             b = out[s["ts"][:key_len]]
@@ -443,7 +448,8 @@ def compute_stats(vehicle, settings=None):
             res.append(b)
         return res
 
-    last = fills[-1] if fills else None
+    real_fills = [f for f in fills if f["liters"]]
+    last = real_fills[-1] if real_fills else None
     now = dt.datetime.now()
     days_since = None
     span_days = None
@@ -458,7 +464,7 @@ def compute_stats(vehicle, settings=None):
 
     return {
         "vehicle": vehicle,
-        "count": len(fills),
+        "count": len([f for f in fills if f["liters"]]),
         "tracked_km": tracked_km,
         "total_liters": total_l,
         "total_cost": total_cost,
@@ -473,7 +479,7 @@ def compute_stats(vehicle, settings=None):
         "last_fill": last,
         "last_odometer": odo_fills[-1]["odometer"] if odo_fills else None,
         "days_since_last": days_since,
-        "avg_km_per_fill": (tracked_km / (len(odo_fills) - 1)) if len(odo_fills) > 1 else None,
+        "avg_km_per_fill": _avg_between_refuels(odo_fills),
         "km_per_month": (tracked_km / span_days * 30.44) if span_days and tracked_km else None,
         "range_km": (vehicle["tank_l"] * avg_kmpl) if (vehicle.get("tank_l") and avg_kmpl) else None,
         "co2_kg": sum((f["liters"] or 0) * (co2_factor(f["fuel_type"], settings["fuel_types"]) or 0) for f in fills),
@@ -604,11 +610,17 @@ def clean_fill(body):
     for k in ("full_tank", "missed_previous"):
         f[k] = 1 if f[k] in (True, 1, "1", "true", "on") else 0
     f["vehicle_id"] = int(f["vehicle_id"] or 0)
-    if not f["liters"] or f["liters"] <= 0:
+    odo_only = body.get("odometer_only") in (True, 1, "1", "true", "on")
+    if odo_only:
+        # an odometer reading without fuel (e.g. at purchase): counts for distance, not for consumption or cost
+        if f["odometer"] is None:
+            raise ValueError("Odometer is missing")
+        f.update(liters=0.0, price_total=None, price_per_l=None, full_tank=0, missed_previous=0, fuel_type=None, img_pump=None, ai_pump=None)
+    elif not f["liters"] or f["liters"] <= 0:
         raise ValueError("Liters is missing")
-    if f["price_total"] is None and f["price_per_l"]:
+    if f["price_total"] is None and f["price_per_l"] and f["liters"]:
         f["price_total"] = round(f["price_per_l"] * f["liters"], 2)
-    if f["price_per_l"] is None and f["price_total"]:
+    if f["price_per_l"] is None and f["price_total"] and f["liters"]:
         f["price_per_l"] = round(f["price_total"] / f["liters"], 3)
     ts = (f["ts"] or "").strip() or dt.datetime.now().strftime("%Y-%m-%dT%H:%M")
     dt.datetime.fromisoformat(ts)
